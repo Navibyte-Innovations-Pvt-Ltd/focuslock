@@ -1,0 +1,39 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint scripts
+        run: shellcheck -s bash focuslock install.sh uninstall.sh
+
+  changelog:
+    name: changelog updated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Check CHANGELOG updated
+        run: |
+          if ! git diff origin/main...HEAD -- CHANGELOG.md | grep -q '^+'; then
+            echo "❌ CHANGELOG.md must be updated in every PR"
+            echo "Add your changes under [Unreleased] in CHANGELOG.md"
+            exit 1
+          fi
+          echo "✅ CHANGELOG.md updated"
