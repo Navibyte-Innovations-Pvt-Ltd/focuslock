@@ -11,6 +11,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] - 2026-05-11
+
+### Fixed
+- Reblock time now displays in 12-hour format (e.g. `03:52 PM` instead of `15:52`)
+
+---
+
 ## [1.0.0] - 2026-05-11
 
 ### Added
@@ -27,5 +34,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `install.sh` and `uninstall.sh`
 - GitHub Actions: lint (shellcheck) + release workflows
 
-[Unreleased]: https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock/releases/tag/v1.0.0
