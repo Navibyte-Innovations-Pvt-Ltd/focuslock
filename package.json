@@ -1,0 +1,31 @@
+{
+  "name": "@navibyte-innovations-pvt-ltd/focuslock",
+  "version": "1.0.0",
+  "description": "macOS temporary site blocker — allow distracting sites for a set duration, auto-reblocks after timer",
+  "keywords": ["macos", "productivity", "site-blocker", "focus", "cli", "bash"],
+  "homepage": "https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock",
+  "bugs": "https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "echo '\\nfocuslock downloaded. Run: sudo bash install.sh\\n'"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "focuslock",
+    "install.sh",
+    "uninstall.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "os": ["darwin"]
+}
