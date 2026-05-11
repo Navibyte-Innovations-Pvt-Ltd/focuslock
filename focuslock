@@ -1,0 +1,272 @@
+#!/bin/bash
+# focuslock — temporary site blocker for macOS
+# Config: ~/.focuslock/sites
+
+CONFIG_DIR="$HOME/.focuslock"
+SITES_FILE="$CONFIG_DIR/sites"
+PIDFILE="/tmp/focuslock.pid"
+ALLOWED_FILE="/tmp/focuslock-allowed"
+HOSTS="/etc/hosts"
+LOG="/tmp/focuslock.log"
+
+# Elevate for commands that touch /etc/hosts
+COMMAND="${1:-help}"
+case "$COMMAND" in
+  allow|block|add|remove)
+    [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
+    ;;
+esac
+
+ensure_config() {
+  mkdir -p "$CONFIG_DIR"
+  if [ ! -f "$SITES_FILE" ]; then
+    cat > "$SITES_FILE" << 'DEFAULTS'
+linkedin.com
+facebook.com
+instagram.com
+amazon.in
+youtube.com
+DEFAULTS
+  fi
+}
+
+read_sites() {
+  ensure_config
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    echo "$line"
+  done < "$SITES_FILE"
+}
+
+close_chrome_tabs() {
+  local domains_as=""
+  while IFS= read -r site; do
+    domains_as="${domains_as}\"${site}\", "
+  done < "$SITES_FILE"
+  domains_as="${domains_as%, }"
+
+  local LOGGED_USER
+  LOGGED_USER=$(stat -f "%Su" /dev/console)
+  sudo -u "$LOGGED_USER" osascript << APPLESCRIPT 2>/dev/null
+tell application "Google Chrome"
+    set blockedDomains to {${domains_as}}
+    repeat with w in windows
+        set tabsToClose to {}
+        repeat with t in tabs of w
+            set tabURL to URL of t
+            repeat with domain in blockedDomains
+                if tabURL contains (domain as string) then
+                    set end of tabsToClose to t
+                    exit repeat
+                end if
+            end repeat
+        end repeat
+        repeat with t in reverse of tabsToClose
+            close t
+        end repeat
+    end repeat
+end tell
+APPLESCRIPT
+}
+
+cmd_allow() {
+  ensure_config
+
+  # Build site list
+  sites=()
+  while IFS= read -r site; do
+    sites+=("$site")
+  done < <(read_sites)
+
+  [ ${#sites[@]} -eq 0 ] && echo "No sites in config. Run: focuslock add <domain>" && exit 1
+
+  echo ""
+  echo "Which sites to allow?"
+  i=1
+  for site in "${sites[@]}"; do
+    echo "  $i) $site"
+    i=$((i+1))
+  done
+  echo "  a) All"
+  echo ""
+  read -p "Choice [e.g. 1 3 or 'a']: " site_input
+
+  selected=()
+  if [ "$site_input" = "a" ]; then
+    selected=("${sites[@]}")
+  else
+    for n in $site_input; do
+      if [[ "$n" =~ ^[0-9]+$ ]]; then
+        idx=$((n-1))
+        if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#sites[@]}" ]; then
+          selected+=("${sites[$idx]}")
+        else
+          echo "  Skipping out-of-range: $n"
+        fi
+      else
+        echo "  Skipping invalid: $n"
+      fi
+    done
+  fi
+
+  [ ${#selected[@]} -eq 0 ] && echo "No valid sites selected. Exiting." && exit 1
+
+  echo ""
+  echo "Allow for how long?"
+  echo "  1) 5 min"
+  echo "  2) 10 min"
+  echo "  3) 30 min"
+  echo "  4) 1 hour"
+  echo "  5) 2 hours"
+  echo ""
+  read -p "Choice [1-5]: " t
+
+  case "$t" in
+    1) MINUTES=5 ;;
+    2) MINUTES=10 ;;
+    3) MINUTES=30 ;;
+    4) MINUTES=60 ;;
+    5) MINUTES=120 ;;
+    *) echo "Invalid choice. Exiting."; exit 1 ;;
+  esac
+
+  # Kill existing timer
+  [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null && rm -f "$PIDFILE"
+
+  # Save selected for reblock
+  printf '%s\n' "${selected[@]}" > "$ALLOWED_FILE"
+
+  # Comment out selected sites in /etc/hosts
+  for site in "${selected[@]}"; do
+    base="${site#www.}"
+    escaped="${base//./\\.}"
+    sed -i '' -E "/^127\.0\.0\.1[[:space:]]+(www\.)?${escaped}/s/^/# /" "$HOSTS"
+  done
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+
+  REBLOCK_AT=$(date -v+${MINUTES}M '+%H:%M')
+  echo ""
+  echo "Allowed : ${selected[*]}"
+  echo "Reblocks: $REBLOCK_AT"
+
+  SCRIPT_PATH="$0"
+  nohup bash -c "sleep $((MINUTES * 60)) && sudo '$SCRIPT_PATH' block" > "$LOG" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "Timer PID: $(cat $PIDFILE)"
+}
+
+cmd_block() {
+  ensure_config
+
+  if [ -f "$ALLOWED_FILE" ]; then
+    while IFS= read -r site; do
+      base="${site#www.}"
+      escaped="${base//./\\.}"
+      sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?${escaped})/\1/" "$HOSTS"
+    done < "$ALLOWED_FILE"
+    rm -f "$ALLOWED_FILE"
+  else
+    while IFS= read -r site; do
+      base="${site#www.}"
+      escaped="${base//./\\.}"
+      sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?${escaped})/\1/" "$HOSTS"
+    done < <(read_sites)
+  fi
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  close_chrome_tabs
+
+  echo "$(date '+%H:%M'): Sites re-blocked" | tee -a "$LOG"
+  rm -f "$PIDFILE"
+}
+
+cmd_add() {
+  ensure_config
+  local site="${1#www.}"
+  [ -z "$site" ] && echo "Usage: focuslock add <domain>" && exit 1
+
+  if grep -qxF "$site" "$SITES_FILE" 2>/dev/null; then
+    echo "$site already in list"
+    exit 0
+  fi
+
+  echo "$site" >> "$SITES_FILE"
+
+  if ! grep -qE "127\.0\.0\.1[[:space:]]+${site//./\\.}" "$HOSTS"; then
+    printf "127.0.0.1\t%s\n127.0.0.1\twww.%s\n" "$site" "$site" >> "$HOSTS"
+  fi
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  echo "Added and blocked: $site"
+}
+
+cmd_remove() {
+  ensure_config
+  local site="${1#www.}"
+  [ -z "$site" ] && echo "Usage: focuslock remove <domain>" && exit 1
+
+  sed -i '' "/^${site}$/d" "$SITES_FILE"
+  sed -i '' -E "/127\.0\.0\.1[[:space:]]+(www\.)?${site//./\\.}/d" "$HOSTS"
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  echo "Removed: $site"
+}
+
+cmd_list() {
+  ensure_config
+  echo "Blocked sites:"
+  while IFS= read -r site; do
+    escaped="${site//./\\.}"
+    if grep -qE "^#[[:space:]]*127\.0\.0\.1[[:space:]]+(www\.)?${escaped}" "$HOSTS" 2>/dev/null; then
+      echo "  $site  [ALLOWED now]"
+    else
+      echo "  $site  [blocked]"
+    fi
+  done < <(read_sites)
+}
+
+cmd_status() {
+  if [ -f "$PIDFILE" ]; then
+    PID=$(cat "$PIDFILE")
+    if kill -0 "$PID" 2>/dev/null; then
+      echo "Status: ALLOWING"
+      [ -f "$ALLOWED_FILE" ] && echo "Sites:" && sed 's/^/  /' "$ALLOWED_FILE"
+    else
+      echo "Status: BLOCKED (timer expired or killed)"
+      rm -f "$PIDFILE"
+    fi
+  else
+    echo "Status: BLOCKED"
+  fi
+}
+
+cmd_help() {
+  cat << 'HELP'
+focuslock — temporary site blocker for macOS
+
+Usage:
+  sudo focuslock allow          pick sites + duration, auto-reblocks
+  sudo focuslock block          reblock immediately
+  sudo focuslock add <domain>   add site to block list
+  sudo focuslock remove <domain> remove site from block list
+  focuslock list                show all sites + current state
+  focuslock status              show timer status
+
+Config: ~/.focuslock/sites (one domain per line)
+HELP
+}
+
+case "$COMMAND" in
+  allow)  shift; cmd_allow "$@" ;;
+  block)  shift; cmd_block "$@" ;;
+  add)    shift; cmd_add "$@" ;;
+  remove) shift; cmd_remove "$@" ;;
+  list)   cmd_list ;;
+  status) cmd_status ;;
+  *)      cmd_help ;;
+esac
