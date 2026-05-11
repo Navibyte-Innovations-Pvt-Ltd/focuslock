@@ -146,7 +146,7 @@ cmd_allow() {
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
 
-  REBLOCK_AT=$(date -v+${MINUTES}M '+%H:%M')
+  REBLOCK_AT=$(date -v+${MINUTES}M '+%I:%M %p')
   echo ""
   echo "Allowed : ${selected[*]}"
   echo "Reblocks: $REBLOCK_AT"
@@ -179,7 +179,7 @@ cmd_block() {
   killall -HUP mDNSResponder 2>/dev/null
   close_chrome_tabs
 
-  echo "$(date '+%H:%M'): Sites re-blocked" | tee -a "$LOG"
+  echo "$(date '+%I:%M %p'): Sites re-blocked" | tee -a "$LOG"
   rm -f "$PIDFILE"
 }
 
