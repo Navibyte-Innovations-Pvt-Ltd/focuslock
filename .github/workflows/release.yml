@@ -18,26 +18,35 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           ARCHIVE="focuslock-${VERSION}.tar.gz"
-          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md
+          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md README.md LICENSE CHANGELOG.md
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES=$(awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
+          echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "focuslock ${{ env.VERSION }}"
           body: |
+            ## Changes
+            ${{ steps.changelog.outputs.NOTES }}
+
+            ---
+
             ## Install
 
             ```bash
             curl -L https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/focuslock-${{ env.VERSION }}.tar.gz | tar -xz
             sudo bash install.sh
             ```
-
-            ## What's included
-            - `focuslock` — main CLI binary
-            - `install.sh` — sets up config + /etc/hosts entries
-            - `uninstall.sh` — clean removal
 
             ## Usage
             ```bash
