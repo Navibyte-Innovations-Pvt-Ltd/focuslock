@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
 
 jobs:
   release:
@@ -13,30 +13,59 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-      - name: Build tarball
+      - name: Bump patch version
+        id: version
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-          ARCHIVE="focuslock-${VERSION}.tar.gz"
-          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md README.md LICENSE CHANGELOG.md
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+          MINOR=$(echo "$LATEST" | cut -d. -f2)
+          PATCH=$(echo "$LATEST" | cut -d. -f3)
+          VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Auto version: $VERSION (previous: $LATEST)"
 
-      - name: Extract changelog for this version
+      - name: Extract [Unreleased] changelog
         id: changelog
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          NOTES=$(awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
+          NOTES=$(awk '/^## \[Unreleased\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^[[:space:]]*$/d')
+          if [ -z "$NOTES" ]; then
+            NOTES="No changelog entry — see commits for changes."
+          fi
           echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Update CHANGELOG.md
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          DATE=$(date '+%Y-%m-%d')
+          sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n---\n\n## [${VERSION#v}] - ${DATE}/" CHANGELOG.md
+
+      - name: Build tarball
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ARCHIVE="focuslock-${VERSION}.tar.gz"
+          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md README.md LICENSE CHANGELOG.md
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Commit updated CHANGELOG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore: update CHANGELOG for ${{ steps.version.outputs.VERSION }}"
+          git push
+
+      - name: Tag and release
         uses: softprops/action-gh-release@v2
         with:
-          name: "focuslock ${{ env.VERSION }}"
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: "focuslock ${{ steps.version.outputs.VERSION }}"
           body: |
             ## Changes
             ${{ steps.changelog.outputs.NOTES }}
@@ -46,7 +75,7 @@ jobs:
             ## Install
 
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/focuslock-${{ env.VERSION }}.tar.gz | tar -xz
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/focuslock-${{ steps.version.outputs.VERSION }}.tar.gz | tar -xz
             sudo bash install.sh
             ```
 
