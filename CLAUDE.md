@@ -1,33 +1,117 @@
-# focuslock — Project Rules
+# focuslock — CLAUDE.md
 
 ## What this is
-macOS bash tool that temporarily allows blocked distracting sites, then auto-reblocks after a chosen duration. Blocks via `/etc/hosts` + flushes OS/Chrome DNS.
+macOS CLI tool that temporarily unblocks distracting sites in `/etc/hosts`, then auto-reblocks after a user-chosen duration. Interactive: picks sites, picks duration, spawns background timer.
 
 ## File map
-- `focuslock` — single CLI binary with subcommands (allow / block / add / remove / list / status)
-- `install.sh` — copies binary, seeds `~/.focuslock/sites`, adds /etc/hosts entries
-- `uninstall.sh` — removes binary, cleans /etc/hosts entries, removes config
+```
+focuslock          main CLI binary — all logic lives here
+install.sh         copies binary, seeds config, adds /etc/hosts entries
+uninstall.sh       removes binary, removes /etc/hosts entries, removes config
+```
+
+## Critical logic — read before touching hosts code
+
+**BLOCKED state** = active line in /etc/hosts:
+```
+127.0.0.1    instagram.com
+```
+
+**ALLOWED state** = commented out:
+```
+# 127.0.0.1    instagram.com
+```
+
+This is counterintuitive. "allow" = add `#`. "block" = remove `#`.
+
+Commenting patterns (macOS BSD sed, NOT GNU):
+```bash
+# Allow (add # prefix to active block entries):
+sed -i '' -E "/^127\.0\.0\.1[[:space:]]+(www\.)?${escaped}/s/^/# /" /etc/hosts
+
+# Block (remove # prefix from commented entries):
+sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?${escaped})/\1/" /etc/hosts
+```
+
+Escape dots in domain for sed regex: `escaped="${domain//./\\.}"`
+
+Always flush DNS after any /etc/hosts change:
+```bash
+dscacheutil -flushcache && killall -HUP mDNSResponder 2>/dev/null
+```
 
 ## Config
-- `~/.focuslock/sites` — one base domain per line (no `www.`), comments with `#`
-- `/etc/hosts` — blocking entries added as `127.0.0.1 domain` + `127.0.0.1 www.domain`
-- `/tmp/focuslock.pid` — background timer PID
-- `/tmp/focuslock-allowed` — sites currently allowed (used by block to know what to restore)
+- `~/.focuslock/sites` — one base domain per line, no `www.`, `#` = comment
+- `/tmp/focuslock.pid` — PID of background reblock timer
+- `/tmp/focuslock-allowed` — newline list of sites currently allowed (block reads this to know what to restore)
 
-## Constraints
-- macOS only — uses `dscacheutil`, `mDNSResponder`, `osascript`, `stat -f "%Su"`
-- bash 3.2 (macOS default) — NO `mapfile`, NO `declare -A` associative arrays
-- All `/etc/hosts` edits need root — script self-elevates via `exec sudo "$0" "$@"`
-- Chrome tab closing runs as logged-in user (not root) via `sudo -u "$LOGGED_USER" osascript`
-- `sed -i ''` (macOS BSD sed) — not GNU sed
+## Timer mechanism
+`allow` spawns a nohup background process:
+```bash
+nohup bash -c "sleep $((MINUTES * 60)) && sudo '$SCRIPT_PATH' block" > /tmp/focuslock.log 2>&1 &
+echo $! > /tmp/focuslock.pid
+```
+Survives terminal close. Running `allow` again kills old timer and starts fresh.
 
-## Patterns
-- Escape dots in domains for sed: `${domain//./\\.}`
-- Comment a host entry (allow): `sed -i '' -E "/^127\.0\.0\.1.../s/^/# /"`
-- Uncomment a host entry (block): `sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1...)/\1/"`
-- Always `dscacheutil -flushcache && killall -HUP mDNSResponder` after hosts changes
+## Known gotchas
+
+**Chrome DNS cache**: OS DNS flush (`dscacheutil`) doesn't clear Chrome's internal DNS cache. Chrome caches DNS ~1 min. Fix: `block` closes all Chrome tabs for blocked domains via AppleScript — forces fresh DNS lookup on next visit.
+
+**AppleScript + root**: Running `osascript` as root fails with `-1743` (not authorized to send Apple events). Must run as logged-in user:
+```bash
+LOGGED_USER=$(stat -f "%Su" /dev/console)
+sudo -u "$LOGGED_USER" osascript << 'APPLESCRIPT'
+...
+APPLESCRIPT
+```
+
+**bash 3.2**: macOS ships bash 3.2 (GPL license). No `declare -A` (associative arrays added in 4.0). No `mapfile`/`readarray`. Use while+read loops and case statements instead.
+
+**BSD sed vs GNU sed**: macOS uses BSD sed. `sed -i ''` (empty string required). No `\|` alternation in basic regex — use `-E` for extended regex with `(a|b)` syntax.
+
+**www. variants**: Every domain in config needs both `domain.com` and `www.domain.com` entries in /etc/hosts. `install.sh` and `add` command handle this. Sed patterns use `(www\.)?` to match both.
+
+## Subcommand map
+| Command | Needs root | What it does |
+|---------|------------|--------------|
+| `allow` | yes | prompts site + duration, comments out entries, starts timer |
+| `block` | yes | uncomments entries from ALLOWED_FILE (or all), closes Chrome tabs |
+| `add <domain>` | yes | appends to sites file, adds /etc/hosts entries |
+| `remove <domain>` | yes | removes from sites file and /etc/hosts |
+| `list` | no | reads sites file, checks current state in /etc/hosts |
+| `status` | no | checks if PID in pidfile is alive |
+
+Root elevation: script self-elevates via `exec sudo "$0" "$@"` at top based on subcommand.
+
+## Development workflow
+
+Test a sed pattern before applying to real hosts file:
+```bash
+echo "127.0.0.1	instagram.com" | sed -E '/^127\.0\.0\.1[[:space:]]+(www\.)?instagram/s/^/# /'
+echo "# 127.0.0.1	instagram.com" | sed -E 's/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?instagram)/\1/'
+```
+
+Check current hosts state:
+```bash
+grep -E "(linkedin|facebook|instagram|amazon|youtube)" /etc/hosts
+```
+
+Check timer:
+```bash
+focuslock status
+cat /tmp/focuslock.pid
+cat /tmp/focuslock-allowed
+```
+
+After editing `focuslock` locally, reinstall:
+```bash
+sudo cp focuslock /usr/local/bin/focuslock
+```
 
 ## Do not
-- Hardcode site list — read from `~/.focuslock/sites`
-- Use `declare -A` — bash 3.2 incompatible
-- Touch production/remote hosts — localhost only
+- Hardcode site list anywhere — always read from `~/.focuslock/sites`
+- Use `declare -A` or `mapfile` — bash 3.2 incompatible
+- Run `osascript` as root — use `sudo -u "$LOGGED_USER"`
+- Use GNU sed syntax — macOS uses BSD sed
+- Connect to any remote/production host — localhost only
+- Remove the `# ` prefix check in block's sed — double-unblocking corrupts hosts file
