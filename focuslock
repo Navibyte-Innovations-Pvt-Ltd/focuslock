@@ -152,7 +152,7 @@ cmd_allow() {
   echo "Reblocks: $REBLOCK_AT"
 
   SCRIPT_PATH="$0"
-  nohup bash -c "sleep $((MINUTES * 60)) && sudo '$SCRIPT_PATH' block" > "$LOG" 2>&1 &
+  nohup bash -c "sleep $((MINUTES * 60)) && '$SCRIPT_PATH' block" > "$LOG" 2>&1 &
   echo $! > "$PIDFILE"
   echo "Timer PID: $(cat $PIDFILE)"
 }

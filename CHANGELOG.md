@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Auto-reblock timer called `sudo focuslock block` from already-root process — sudo inside root silently fails. Timer now calls `focuslock block` directly (already root).
+
 ### Changed
 - Release workflow now auto-triggers on push to main (no manual tagging needed)
 - Release workflow now publishes npm package to GitHub Packages on every release
