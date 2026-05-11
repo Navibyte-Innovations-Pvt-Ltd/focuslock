@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +28,7 @@ jobs:
           PATCH=$(echo "$LATEST" | cut -d. -f3)
           VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "SEMVER=${VERSION#v}" >> "$GITHUB_OUTPUT"
           echo "Auto version: $VERSION (previous: $LATEST)"
 
       - name: Extract [Unreleased] changelog
@@ -34,17 +36,11 @@ jobs:
         run: |
           NOTES=$(awk '/^## \[Unreleased\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^[[:space:]]*$/d')
           if [ -z "$NOTES" ]; then
-            NOTES="No changelog entry — see commits for changes."
+            NOTES="Maintenance release."
           fi
           echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Update CHANGELOG.md
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          DATE=$(date '+%Y-%m-%d')
-          sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n---\n\n## [${VERSION#v}] - ${DATE}/" CHANGELOG.md
 
       - name: Build tarball
         run: |
@@ -53,15 +49,7 @@ jobs:
           tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md README.md LICENSE CHANGELOG.md
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
-      - name: Commit updated CHANGELOG
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git diff --staged --quiet || git commit -m "chore: update CHANGELOG for ${{ steps.version.outputs.VERSION }}"
-          git push
-
-      - name: Tag and release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
@@ -87,5 +75,23 @@ jobs:
             focuslock help          # all commands
             ```
           files: ${{ env.ARCHIVE }}
-          draft: false
-          prerelease: false
+
+      - name: Set up Node.js for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@navibyte-innovations-pvt-ltd'
+
+      - name: Publish to GitHub Packages (npm)
+        run: |
+          SEMVER="${{ steps.version.outputs.SEMVER }}"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${SEMVER}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
