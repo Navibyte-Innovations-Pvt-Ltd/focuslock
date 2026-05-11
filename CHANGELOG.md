@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Release workflow now auto-triggers on push to main (no manual tagging needed)
+- Release workflow now publishes npm package to GitHub Packages on every release
+- Removed bot CHANGELOG commit step that was failing against branch protection
+
+### Added
+- `package.json` for GitHub Packages npm registry (`@navibyte-innovations-pvt-ltd/focuslock`)
+
 ---
 
 ## [1.0.1] - 2026-05-11
