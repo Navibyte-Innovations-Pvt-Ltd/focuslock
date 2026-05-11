@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="focuslock-${VERSION}.tar.gz"
+          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "focuslock ${{ env.VERSION }}"
+          body: |
+            ## Install
+
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/focuslock-${{ env.VERSION }}.tar.gz | tar -xz
+            sudo bash install.sh
+            ```
+
+            ## What's included
+            - `focuslock` — main CLI binary
+            - `install.sh` — sets up config + /etc/hosts entries
+            - `uninstall.sh` — clean removal
+
+            ## Usage
+            ```bash
+            sudo focuslock allow    # pick sites + duration, auto-reblocks
+            sudo focuslock block    # manual reblock
+            focuslock list          # see all sites + state
+            focuslock help          # all commands
+            ```
+          files: ${{ env.ARCHIVE }}
+          draft: false
+          prerelease: false
