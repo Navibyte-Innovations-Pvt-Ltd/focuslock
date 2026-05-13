@@ -10,6 +10,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- `osascript` hangs indefinitely when Chrome is not running — `tell application "Google Chrome"` launches Chrome and waits. Now skips Chrome tab closing if Chrome is not already open.
+
+---
+
+## [Previous Unreleased — merged]
+
+### Fixed
 - Auto-reblock timer called `sudo focuslock block` from already-root process — sudo inside root silently fails. Timer now calls `focuslock block` directly (already root).
 
 ### Changed

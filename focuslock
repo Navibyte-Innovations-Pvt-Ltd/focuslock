@@ -47,7 +47,9 @@ close_chrome_tabs() {
 
   local LOGGED_USER
   LOGGED_USER=$(stat -f "%Su" /dev/console)
-  sudo -u "$LOGGED_USER" osascript << APPLESCRIPT 2>/dev/null
+  # Only run if Chrome is already open — osascript launches Chrome if not running, causing hang
+  if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+    sudo -u "$LOGGED_USER" osascript << APPLESCRIPT 2>/dev/null
 tell application "Google Chrome"
     set blockedDomains to {${domains_as}}
     repeat with w in windows
@@ -67,6 +69,7 @@ tell application "Google Chrome"
     end repeat
 end tell
 APPLESCRIPT
+  fi
 }
 
 cmd_allow() {
