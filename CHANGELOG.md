@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Lint workflow runs on PRs only — not on push to main (redundant after merge)
+
 ### Fixed
 - `osascript` hangs indefinitely when Chrome is not running — `tell application "Google Chrome"` launches Chrome and waits. Now skips Chrome tab closing if Chrome is not already open.
 
