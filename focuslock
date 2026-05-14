@@ -133,6 +133,21 @@ cmd_allow() {
     *) echo "Invalid choice. Exiting."; exit 1 ;;
   esac
 
+  REBLOCK_AT=$(date -v+${MINUTES}M '+%I:%M %p')
+
+  echo ""
+  echo "Summary:"
+  for site in "${selected[@]}"; do
+    echo "  - $site"
+  done
+  echo "Duration: ${MINUTES} min (reblocks at ${REBLOCK_AT})"
+  echo ""
+  read -rp "Confirm? [y/N]: " confirm
+  case "$confirm" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "Cancelled."; exit 0 ;;
+  esac
+
   # Kill existing timer
   [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null && rm -f "$PIDFILE"
 
@@ -149,7 +164,6 @@ cmd_allow() {
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
 
-  REBLOCK_AT=$(date -v+${MINUTES}M '+%I:%M %p')
   echo ""
   echo "Allowed : ${selected[*]}"
   echo "Reblocks: $REBLOCK_AT"
