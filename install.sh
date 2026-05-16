@@ -43,6 +43,41 @@ done < "$CONFIG_DIR/sites"
 dscacheutil -flushcache
 killall -HUP mDNSResponder 2>/dev/null
 
+# Install LaunchAgent to reblock on login (survives restarts)
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(eval echo "~$REAL_USER")
+LAUNCH_AGENTS_DIR="$REAL_HOME/Library/LaunchAgents"
+PLIST="$LAUNCH_AGENTS_DIR/com.focuslock.reblock.plist"
+
+mkdir -p "$LAUNCH_AGENTS_DIR"
+cat > "$PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.focuslock.reblock</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/focuslock</string>
+        <string>block</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$REAL_HOME/.focuslock/focuslock.log</string>
+    <key>StandardErrorPath</key>
+    <string>$REAL_HOME/.focuslock/focuslock.log</string>
+</dict>
+</plist>
+PLIST_EOF
+
+chown "$REAL_USER" "$PLIST"
+
+# Load it for the current session without requiring re-login
+sudo -u "$REAL_USER" launchctl load "$PLIST" 2>/dev/null || true
+
 echo ""
 echo "focuslock installed."
+echo "LaunchAgent installed — focuslock block will run automatically on login."
 echo "Run: sudo focuslock allow"
