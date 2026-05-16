@@ -432,9 +432,24 @@ cmd_history() {
   tail -n 50 "$HISTORY_FILE"
 }
 
+# Normalize user-supplied domain: strip protocol, www., path, port, trailing slash.
+# Without this, `focuslock add https://www.reddit.com` wrote a junk hosts line
+# (`127.0.0.1 https://www.reddit.com`) that never matched any DNS lookup.
+sanitize_domain() {
+  local raw="$1"
+  raw="${raw#http://}"
+  raw="${raw#https://}"
+  raw="${raw#www.}"
+  raw="${raw%%/*}"   # strip any path
+  raw="${raw%%:*}"   # strip any port
+  raw="${raw%%\?*}"  # strip any query
+  echo "$raw"
+}
+
 cmd_add() {
   ensure_config
-  local site="${1#www.}"
+  local site
+  site=$(sanitize_domain "$1")
   [ -z "$site" ] && echo "Usage: focuslock add <domain>" && exit 1
 
   if grep -qxF "$site" "$SITES_FILE" 2>/dev/null; then
@@ -458,11 +473,17 @@ cmd_add() {
 
 cmd_remove() {
   ensure_config
-  local site="${1#www.}"
+  local site
+  site=$(sanitize_domain "$1")
   [ -z "$site" ] && echo "Usage: focuslock remove <domain>" && exit 1
 
+  # Match either the sanitized form, or any raw form left from buggy older adds
+  local raw_pattern
+  raw_pattern=$(printf '%s\n' "$1" | sed 's/[][\\.*^$/]/\\&/g')
   sed -i '' "/^${site}$/d" "$SITES_FILE"
+  [ "$raw_pattern" != "$site" ] && sed -i '' "/^${raw_pattern}$/d" "$SITES_FILE"
   sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+(www\.)?${site//./\\.}/d" "$HOSTS"
+  [ "$raw_pattern" != "$site" ] && sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+${raw_pattern//./\\.}/d" "$HOSTS"
 
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
