@@ -124,8 +124,56 @@ shuffle_lines() {
   awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -k1,1n | cut -f2-
 }
 
+# Read history.log + print today total + per-site last-allow stamps.
+# Pure read, no state changes. Quiet if no history.
+show_usage_stats() {
+  [ ! -f "$HISTORY_FILE" ] && return
+  local today total_today
+  today=$(date '+%Y-%m-%d')
+
+  total_today=$(awk -F' \\| ' -v today="$today" '
+    {
+      split($1, dp, " ")
+      if (dp[1] != today) next
+      if ($2 !~ /^ALLOW /) next
+      split($2, parts, " ")
+      mins = parts[2]; sub(/m$/, "", mins)
+      sum += mins + 0
+    }
+    END { print sum+0 }
+  ' "$HISTORY_FILE")
+
+  echo ""
+  echo "Today: ${total_today} min allowed total"
+  echo ""
+  echo "Last allowed:"
+  local any=0
+  while IFS= read -r site; do
+    local last ts mins pretty
+    last=$(awk -F' \\| ' -v site="$site" '
+      $2 ~ /^ALLOW / {
+        idx = index($2, ": ")
+        if (idx == 0) next
+        list = substr($2, idx+2)
+        n = split(list, sites, " ")
+        for (i=1; i<=n; i++) if (sites[i] == site) { print $0; break }
+      }
+    ' "$HISTORY_FILE" | tail -n1)
+    if [ -n "$last" ]; then
+      ts=$(awk -F' \\| ' '{print $1}' <<< "$last")
+      mins=$(awk -F' \\| ' '{print $2}' <<< "$last" | awk '{print $2}' | tr -d 'm:')
+      pretty=$(date -j -f '%Y-%m-%d %H:%M:%S' "$ts" '+%-I:%M %p, %b %d' 2>/dev/null)
+      printf "  %-18s %s for %s min\n" "$site" "${pretty:-$ts}" "$mins"
+      any=1
+    fi
+  done < <(read_sites)
+  [ "$any" = "0" ] && echo "  (no previous allows yet)"
+  return 0
+}
+
 cmd_allow() {
   ensure_config
+  show_usage_stats
 
   # Build site list, then shuffle order so position changes every run
   sites=()
