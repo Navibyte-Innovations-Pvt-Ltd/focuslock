@@ -9,10 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Persistent state in `/var/db/focuslock/` (expires-at, allowed, history.log) — survives reboot, replacing `/tmp` which macOS wipes on boot
+- LaunchDaemon `dev.focuslock.reblock` runs `focuslock check` every 60s and at boot — re-blocks if expiry passed, even after laptop restart or sleep (closes #7)
+- `focuslock history` command — view last 50 allow/block events
+- `focuslock check`, `install-daemon`, `uninstall-daemon` subcommands
+- Randomized site + duration labels on every `allow` (random letters, shuffled order) — forces user to read prompts instead of muscle-memory typing
+- Confirmation step in `allow` — must type a randomly generated short code before block is applied, preventing accidental allows (closes #5)
+
 ### Changed
 - Lint workflow runs on PRs only — not on push to main (redundant after merge)
+- `allow` no longer spawns nohup `sleep` timer; LaunchDaemon handles reblock instead (more reliable, survives shutdown)
+- `status` now reports remaining time + daemon install state
 
 ### Fixed
+- Sites stayed permanently allowed after reboot because `/tmp/focuslock-allowed` was wiped on boot before any reblock could run — fixed by moving state to `/var/db/focuslock`
 - `osascript` hangs indefinitely when Chrome is not running — `tell application "Google Chrome"` launches Chrome and waits. Now skips Chrome tab closing if Chrome is not already open.
 
 ---
