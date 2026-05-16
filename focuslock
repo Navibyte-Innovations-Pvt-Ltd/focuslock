@@ -72,66 +72,118 @@ APPLESCRIPT
   fi
 }
 
+# Pick N unique random letters from a confusion-free pool.
+# Forces user to read labels every run instead of muscle-memory typing.
+random_labels() {
+  local n=$1
+  printf '%s\n' b c d e f g h j k m n p q r s t u v w x y z \
+    | awk 'BEGIN{srand()}{print rand()"\t"$0}' \
+    | sort -k1,1n | cut -f2 | head -n "$n"
+}
+
+# Shuffle a list of lines.
+shuffle_lines() {
+  awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -k1,1n | cut -f2-
+}
+
 cmd_allow() {
   ensure_config
 
-  # Build site list
+  # Build site list, then shuffle order so position changes every run
   sites=()
   while IFS= read -r site; do
     sites+=("$site")
-  done < <(read_sites)
+  done < <(read_sites | shuffle_lines)
 
   [ ${#sites[@]} -eq 0 ] && echo "No sites in config. Run: focuslock add <domain>" && exit 1
 
+  # Random letter labels — one per site, plus one for "all"
+  site_labels=()
+  while IFS= read -r lbl; do
+    site_labels+=("$lbl")
+  done < <(random_labels $((${#sites[@]} + 1)))
+
+  all_label="${site_labels[${#sites[@]}]}"
+
   echo ""
   echo "Which sites to allow?"
-  i=1
-  for site in "${sites[@]}"; do
-    echo "  $i) $site"
-    i=$((i+1))
+  for ((i=0; i<${#sites[@]}; i++)); do
+    echo "  ${site_labels[$i]}) ${sites[$i]}"
   done
-  echo "  a) All"
+  echo "  ${all_label}) All"
   echo ""
-  read -rp "Choice [e.g. 1 3 or 'a']: " site_input
+  read -rp "Choice [e.g. ${site_labels[0]} ${site_labels[1]} or '${all_label}']: " site_input
 
   selected=()
-  if [ "$site_input" = "a" ]; then
+  # Tokenize input on whitespace/commas
+  tokens=$(echo "$site_input" | tr ',' ' ')
+  use_all=0
+  for tok in $tokens; do
+    [ "$tok" = "$all_label" ] && use_all=1 && break
+  done
+
+  if [ $use_all -eq 1 ]; then
     selected=("${sites[@]}")
   else
-    for n in $site_input; do
-      if [[ "$n" =~ ^[0-9]+$ ]]; then
-        idx=$((n-1))
-        if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#sites[@]}" ]; then
-          selected+=("${sites[$idx]}")
-        else
-          echo "  Skipping out-of-range: $n"
+    for tok in $tokens; do
+      matched=0
+      for ((i=0; i<${#sites[@]}; i++)); do
+        if [ "$tok" = "${site_labels[$i]}" ]; then
+          selected+=("${sites[$i]}")
+          matched=1
+          break
         fi
-      else
-        echo "  Skipping invalid: $n"
-      fi
+      done
+      [ $matched -eq 0 ] && echo "  Skipping unknown: $tok"
     done
   fi
 
   [ ${#selected[@]} -eq 0 ] && echo "No valid sites selected. Exiting." && exit 1
 
+  # Duration: shuffle order + random labels too
+  dur_mins=(5 10 30 60 120)
+  dur_text=("5 min" "10 min" "30 min" "1 hour" "2 hours")
+
+  dur_order=()
+  while IFS= read -r idx; do
+    dur_order+=("$idx")
+  done < <(seq 0 $((${#dur_mins[@]} - 1)) | shuffle_lines)
+
+  dur_labels=()
+  while IFS= read -r lbl; do
+    dur_labels+=("$lbl")
+  done < <(random_labels ${#dur_mins[@]})
+
   echo ""
   echo "Allow for how long?"
-  echo "  1) 5 min"
-  echo "  2) 10 min"
-  echo "  3) 30 min"
-  echo "  4) 1 hour"
-  echo "  5) 2 hours"
+  for ((i=0; i<${#dur_order[@]}; i++)); do
+    real_idx="${dur_order[$i]}"
+    echo "  ${dur_labels[$i]}) ${dur_text[$real_idx]}"
+  done
   echo ""
-  read -rp "Choice [1-5]: " t
+  read -rp "Choice: " t
 
-  case "$t" in
-    1) MINUTES=5 ;;
-    2) MINUTES=10 ;;
-    3) MINUTES=30 ;;
-    4) MINUTES=60 ;;
-    5) MINUTES=120 ;;
-    *) echo "Invalid choice. Exiting."; exit 1 ;;
-  esac
+  MINUTES=""
+  for ((i=0; i<${#dur_labels[@]}; i++)); do
+    if [ "$t" = "${dur_labels[$i]}" ]; then
+      real_idx="${dur_order[$i]}"
+      MINUTES="${dur_mins[$real_idx]}"
+      break
+    fi
+  done
+  [ -z "$MINUTES" ] && echo "Invalid choice. Exiting." && exit 1
+
+  # Confirmation prompt — must type a random short code
+  CONFIRM_CODE=$(printf '%s' "${site_labels[@]:0:3}" | tr -d '\n')
+  [ -z "$CONFIRM_CODE" ] && CONFIRM_CODE="${site_labels[0]}"
+  echo ""
+  echo "About to allow: ${selected[*]}"
+  echo "Duration      : $MINUTES min"
+  read -rp "Type '$CONFIRM_CODE' to confirm: " confirm_input
+  if [ "$confirm_input" != "$CONFIRM_CODE" ]; then
+    echo "Confirmation failed. Exiting."
+    exit 1
+  fi
 
   # Kill existing timer
   [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null && rm -f "$PIDFILE"
