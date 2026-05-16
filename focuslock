@@ -229,7 +229,7 @@ cmd_allow() {
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
 
-  REBLOCK_AT=$(date -v+${MINUTES}M '+%I:%M %p')
+  REBLOCK_AT=$(date -v+"${MINUTES}"M '+%I:%M %p')
   echo ""
   echo "Allowed : ${selected[*]}"
   echo "Reblocks: $REBLOCK_AT  (LaunchDaemon checks every 60s — survives reboot)"
