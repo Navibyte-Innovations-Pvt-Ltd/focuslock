@@ -71,6 +71,20 @@ read_sites() {
   done < "$SITES_FILE"
 }
 
+# Strip lines previous buggy `add` left behind, where the "domain" still
+# contained protocol/path/port. Idempotent. Runs before any sed pattern below
+# would interact with the malformed entries.
+repair_bad_entries() {
+  [ -w "$HOSTS" ] || return 0
+  # Delete /etc/hosts lines for 127.0.0.1 or ::1 whose host field has
+  # URL chars (://, /, :, ?) — those never match real DNS.
+  sed -i '' -E '/^#?[[:space:]]*(127\.0\.0\.1|::1)[[:space:]]+[^[:space:]]*(:\/\/|\/|\?|:[0-9])/d' "$HOSTS"
+  # Same cleanup in the sites file — keep blanks and `# comment` lines.
+  if [ -f "$SITES_FILE" ] && [ -w "$SITES_FILE" ]; then
+    sed -i '' -E '/^[^#[:space:]].*[:\/?]/d' "$SITES_FILE"
+  fi
+}
+
 # Many sites (YouTube/Google) resolve via IPv6 — without ::1 entries they
 # bypass IPv4 /etc/hosts entirely. Mirror IPv4 state into ::1 lines.
 # Idempotent; safe to call on every privileged command.
@@ -304,6 +318,7 @@ cmd_allow() {
     install_daemon_silent
   fi
 
+  repair_bad_entries
   migrate_ipv6_hosts
 
   # Comment out selected sites in /etc/hosts (both IPv4 and IPv6 lines)
@@ -325,6 +340,7 @@ cmd_allow() {
 cmd_block() {
   ensure_config
   ensure_state_dir
+  repair_bad_entries
   migrate_ipv6_hosts
 
   blocked_sites=""
@@ -448,6 +464,7 @@ sanitize_domain() {
 
 cmd_add() {
   ensure_config
+  repair_bad_entries
   local site
   site=$(sanitize_domain "$1")
   [ -z "$site" ] && echo "Usage: focuslock add <domain>" && exit 1
