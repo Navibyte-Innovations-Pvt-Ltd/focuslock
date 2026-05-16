@@ -2,7 +2,23 @@
 # focuslock — temporary site blocker for macOS
 # Config: ~/.focuslock/sites
 
-CONFIG_DIR="$HOME/.focuslock"
+# Detect a real home dir. When invoked by LaunchDaemon, $HOME is unset/empty,
+# which made CONFIG_DIR resolve to /.focuslock on the read-only root volume.
+detect_home() {
+  if [ -n "$HOME" ] && [ "$HOME" != "/" ] && [ -d "$HOME" ]; then
+    echo "$HOME"
+    return
+  fi
+  local console_user
+  console_user=$(stat -f "%Su" /dev/console 2>/dev/null)
+  if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ -d "/Users/$console_user" ]; then
+    echo "/Users/$console_user"
+    return
+  fi
+  echo "/var/root"
+}
+
+CONFIG_DIR="$(detect_home)/.focuslock"
 SITES_FILE="$CONFIG_DIR/sites"
 
 # Persistent state — survives reboot (unlike /tmp on macOS)
@@ -29,7 +45,7 @@ history_log() {
 # Elevate for commands that touch /etc/hosts or state dir
 COMMAND="${1:-help}"
 case "$COMMAND" in
-  allow|block|add|remove|check|install-daemon|uninstall-daemon)
+  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh)
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
@@ -385,6 +401,19 @@ cmd_install_daemon() {
   echo "Runs every 60s, including at boot — auto-reblocks if expiry passed."
 }
 
+# Chrome's Secure DNS (DNS-over-HTTPS) sends DNS queries directly to Cloudflare/
+# Google over HTTPS, bypassing /etc/hosts. Write enterprise policy keys that
+# force Chrome to use the OS resolver. Requires Chrome restart to take effect.
+cmd_disable_chrome_doh() {
+  local plist="/Library/Preferences/com.google.Chrome.plist"
+  defaults write "$plist" DnsOverHttpsMode -string "off" 2>/dev/null
+  defaults write "$plist" BuiltInDnsClientEnabled -bool false 2>/dev/null
+  chmod 644 "$plist" 2>/dev/null
+  echo "Chrome policy written: DnsOverHttpsMode=off, BuiltInDnsClientEnabled=false"
+  echo "Restart Chrome (quit fully, then reopen) for policy to apply."
+  echo "Verify at: chrome://policy"
+}
+
 cmd_uninstall_daemon() {
   if [ -f "$DAEMON_PLIST" ]; then
     launchctl unload "$DAEMON_PLIST" 2>/dev/null
@@ -487,8 +516,9 @@ Usage:
   focuslock status                 show timer + daemon status
   focuslock history                show allow/block history
   sudo focuslock check             reblock if expiry passed (daemon uses this)
-  sudo focuslock install-daemon    install LaunchDaemon (runs at boot, every 60s)
-  sudo focuslock uninstall-daemon  remove LaunchDaemon
+  sudo focuslock install-daemon       install LaunchDaemon (runs at boot, every 60s)
+  sudo focuslock uninstall-daemon     remove LaunchDaemon
+  sudo focuslock disable-chrome-doh   stop Chrome bypassing /etc/hosts via DoH
 
 Config: ~/.focuslock/sites (one domain per line)
 HELP
@@ -505,5 +535,6 @@ case "$COMMAND" in
   check)              cmd_check ;;
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
+  disable-chrome-doh) cmd_disable_chrome_doh ;;
   *)                  cmd_help ;;
 esac
