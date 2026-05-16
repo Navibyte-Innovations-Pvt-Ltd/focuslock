@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- `focuslock add <url>` silently wrote a junk `/etc/hosts` line for inputs like `https://www.reddit.com` because only the `www.` prefix was stripped — protocol, paths, and ports leaked into the hosts entry and never matched any DNS lookup, so the site stayed reachable. Now sanitizes input (strips `http(s)://`, `www.`, path, port, query) before adding. `remove` accepts both sanitized and original raw form to clean up legacy bad entries.
 - LaunchDaemon ran with empty `$HOME`, making `CONFIG_DIR` resolve to `/.focuslock` on the read-only root volume and spamming `mkdir: Read-only file system` errors in the daemon log. Now derives a real home (via `/dev/console` console user) when `$HOME` is missing.
 - Chrome's Secure DNS (DNS-over-HTTPS) bypassed `/etc/hosts`, letting YouTube/Google load despite the host file blocks. Install now writes a managed Chrome policy (`DnsOverHttpsMode=off`, `BuiltInDnsClientEnabled=false`) so Chrome uses the OS resolver.
 - YouTube/Google etc. were not actually blocked because they resolve over IPv6 and `/etc/hosts` had only `127.0.0.1` entries — IPv6 lookup returned the real address. Now adds matching `::1` entries; allow/block sed patterns cover both protocols; auto-migration on every privileged command for existing installs.
