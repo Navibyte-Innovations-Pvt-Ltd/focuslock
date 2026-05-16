@@ -43,6 +43,9 @@ done < "$CONFIG_DIR/sites"
 dscacheutil -flushcache
 killall -HUP mDNSResponder 2>/dev/null
 
+# Install reblock daemon — survives reboot, runs at boot + every 60s
+"$INSTALL_DIR/focuslock" install-daemon
+
 echo ""
 echo "focuslock installed."
 echo "Run: sudo focuslock allow"
