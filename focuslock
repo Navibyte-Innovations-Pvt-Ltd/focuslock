@@ -4,15 +4,32 @@
 
 CONFIG_DIR="$HOME/.focuslock"
 SITES_FILE="$CONFIG_DIR/sites"
-PIDFILE="/tmp/focuslock.pid"
-ALLOWED_FILE="/tmp/focuslock-allowed"
-HOSTS="/etc/hosts"
-LOG="/tmp/focuslock.log"
 
-# Elevate for commands that touch /etc/hosts
+# Persistent state — survives reboot (unlike /tmp on macOS)
+STATE_DIR="/var/db/focuslock"
+PIDFILE="$STATE_DIR/timer.pid"
+ALLOWED_FILE="$STATE_DIR/allowed"
+EXPIRES_FILE="$STATE_DIR/expires-at"
+HISTORY_FILE="$STATE_DIR/history.log"
+HOSTS="/etc/hosts"
+LOG="$STATE_DIR/focuslock.log"
+
+DAEMON_PLIST="/Library/LaunchDaemons/dev.focuslock.reblock.plist"
+DAEMON_LABEL="dev.focuslock.reblock"
+
+ensure_state_dir() {
+  [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
+}
+
+history_log() {
+  ensure_state_dir
+  printf '%s | %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$HISTORY_FILE"
+}
+
+# Elevate for commands that touch /etc/hosts or state dir
 COMMAND="${1:-help}"
 case "$COMMAND" in
-  allow|block|add|remove)
+  allow|block|add|remove|check|install-daemon|uninstall-daemon)
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
@@ -185,11 +202,22 @@ cmd_allow() {
     exit 1
   fi
 
+  ensure_state_dir
+
   # Kill existing timer
   [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null && rm -f "$PIDFILE"
 
-  # Save selected for reblock
+  # Save selected for reblock + expiry epoch (used by check + daemon)
   printf '%s\n' "${selected[@]}" > "$ALLOWED_FILE"
+  EXPIRES_AT=$(($(date +%s) + MINUTES * 60))
+  echo "$EXPIRES_AT" > "$EXPIRES_FILE"
+
+  history_log "ALLOW ${MINUTES}m: ${selected[*]}"
+
+  # Make sure reblock daemon is installed (survives reboot)
+  if [ ! -f "$DAEMON_PLIST" ]; then
+    install_daemon_silent
+  fi
 
   # Comment out selected sites in /etc/hosts
   for site in "${selected[@]}"; do
@@ -204,22 +232,20 @@ cmd_allow() {
   REBLOCK_AT=$(date -v+${MINUTES}M '+%I:%M %p')
   echo ""
   echo "Allowed : ${selected[*]}"
-  echo "Reblocks: $REBLOCK_AT"
-
-  SCRIPT_PATH="$0"
-  nohup bash -c "sleep $((MINUTES * 60)) && '$SCRIPT_PATH' block" > "$LOG" 2>&1 &
-  echo $! > "$PIDFILE"
-  echo "Timer PID: $(cat $PIDFILE)"
+  echo "Reblocks: $REBLOCK_AT  (LaunchDaemon checks every 60s — survives reboot)"
 }
 
 cmd_block() {
   ensure_config
+  ensure_state_dir
 
+  blocked_sites=""
   if [ -f "$ALLOWED_FILE" ]; then
     while IFS= read -r site; do
       base="${site#www.}"
       escaped="${base//./\\.}"
       sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?${escaped})/\1/" "$HOSTS"
+      blocked_sites="$blocked_sites $site"
     done < "$ALLOWED_FILE"
     rm -f "$ALLOWED_FILE"
   else
@@ -227,6 +253,7 @@ cmd_block() {
       base="${site#www.}"
       escaped="${base//./\\.}"
       sed -i '' -E "s/^#[[:space:]]*(127\.0\.0\.1[[:space:]]+(www\.)?${escaped})/\1/" "$HOSTS"
+      blocked_sites="$blocked_sites $site"
     done < <(read_sites)
   fi
 
@@ -235,7 +262,73 @@ cmd_block() {
   close_chrome_tabs
 
   echo "$(date '+%I:%M %p'): Sites re-blocked" | tee -a "$LOG"
-  rm -f "$PIDFILE"
+  history_log "BLOCK:${blocked_sites}"
+  rm -f "$PIDFILE" "$EXPIRES_FILE"
+}
+
+# Called by LaunchDaemon every 60s. Re-blocks if expiry passed.
+# Also handles the "laptop slept/rebooted past expiry" case.
+cmd_check() {
+  [ -f "$EXPIRES_FILE" ] || exit 0
+  EXP=$(cat "$EXPIRES_FILE" 2>/dev/null)
+  [ -z "$EXP" ] && exit 0
+  NOW=$(date +%s)
+  if [ "$NOW" -ge "$EXP" ]; then
+    history_log "CHECK: expired (now=$NOW exp=$EXP) -> block"
+    cmd_block
+  fi
+}
+
+install_daemon_silent() {
+  ensure_state_dir
+  local script_path
+  script_path=$(command -v focuslock 2>/dev/null || echo "/usr/local/bin/focuslock")
+  cat > "$DAEMON_PLIST" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${DAEMON_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${script_path}</string>
+    <string>check</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>${LOG}</string>
+  <key>StandardErrorPath</key><string>${LOG}</string>
+</dict>
+</plist>
+PLIST
+  chown root:wheel "$DAEMON_PLIST"
+  chmod 644 "$DAEMON_PLIST"
+  launchctl unload "$DAEMON_PLIST" 2>/dev/null
+  launchctl load -w "$DAEMON_PLIST" 2>/dev/null
+}
+
+cmd_install_daemon() {
+  install_daemon_silent
+  echo "Daemon installed: $DAEMON_PLIST"
+  echo "Runs every 60s, including at boot — auto-reblocks if expiry passed."
+}
+
+cmd_uninstall_daemon() {
+  if [ -f "$DAEMON_PLIST" ]; then
+    launchctl unload "$DAEMON_PLIST" 2>/dev/null
+    rm -f "$DAEMON_PLIST"
+    echo "Daemon removed."
+  else
+    echo "Daemon not installed."
+  fi
+}
+
+cmd_history() {
+  if [ ! -f "$HISTORY_FILE" ]; then
+    echo "No history yet."
+    return
+  fi
+  tail -n 50 "$HISTORY_FILE"
 }
 
 cmd_add() {
@@ -286,17 +379,23 @@ cmd_list() {
 }
 
 cmd_status() {
-  if [ -f "$PIDFILE" ]; then
-    PID=$(cat "$PIDFILE")
-    if kill -0 "$PID" 2>/dev/null; then
-      echo "Status: ALLOWING"
+  if [ -f "$EXPIRES_FILE" ]; then
+    EXP=$(cat "$EXPIRES_FILE" 2>/dev/null)
+    NOW=$(date +%s)
+    if [ -n "$EXP" ] && [ "$NOW" -lt "$EXP" ]; then
+      REMAIN=$(( (EXP - NOW + 59) / 60 ))
+      echo "Status: ALLOWING (${REMAIN} min left, reblocks at $(date -r "$EXP" '+%I:%M %p'))"
       [ -f "$ALLOWED_FILE" ] && echo "Sites:" && sed 's/^/  /' "$ALLOWED_FILE"
     else
-      echo "Status: BLOCKED (timer expired or killed)"
-      rm -f "$PIDFILE"
+      echo "Status: BLOCKED (expiry passed — daemon will reblock within 60s, or run: sudo focuslock block)"
     fi
   else
     echo "Status: BLOCKED"
+  fi
+  if [ -f "$DAEMON_PLIST" ]; then
+    echo "Daemon : installed"
+  else
+    echo "Daemon : NOT installed — run: sudo focuslock install-daemon"
   fi
 }
 
@@ -305,23 +404,31 @@ cmd_help() {
 focuslock — temporary site blocker for macOS
 
 Usage:
-  sudo focuslock allow          pick sites + duration, auto-reblocks
-  sudo focuslock block          reblock immediately
-  sudo focuslock add <domain>   add site to block list
-  sudo focuslock remove <domain> remove site from block list
-  focuslock list                show all sites + current state
-  focuslock status              show timer status
+  sudo focuslock allow             pick sites + duration, auto-reblocks
+  sudo focuslock block             reblock immediately
+  sudo focuslock add <domain>      add site to block list
+  sudo focuslock remove <domain>   remove site from block list
+  focuslock list                   show all sites + current state
+  focuslock status                 show timer + daemon status
+  focuslock history                show allow/block history
+  sudo focuslock check             reblock if expiry passed (daemon uses this)
+  sudo focuslock install-daemon    install LaunchDaemon (runs at boot, every 60s)
+  sudo focuslock uninstall-daemon  remove LaunchDaemon
 
 Config: ~/.focuslock/sites (one domain per line)
 HELP
 }
 
 case "$COMMAND" in
-  allow)  shift; cmd_allow "$@" ;;
-  block)  shift; cmd_block "$@" ;;
-  add)    shift; cmd_add "$@" ;;
-  remove) shift; cmd_remove "$@" ;;
-  list)   cmd_list ;;
-  status) cmd_status ;;
-  *)      cmd_help ;;
+  allow)              shift; cmd_allow "$@" ;;
+  block)              shift; cmd_block "$@" ;;
+  add)                shift; cmd_add "$@" ;;
+  remove)             shift; cmd_remove "$@" ;;
+  list)               cmd_list ;;
+  status)             cmd_status ;;
+  history)            cmd_history ;;
+  check)              cmd_check ;;
+  install-daemon)     cmd_install_daemon ;;
+  uninstall-daemon)   cmd_uninstall_daemon ;;
+  *)                  cmd_help ;;
 esac
