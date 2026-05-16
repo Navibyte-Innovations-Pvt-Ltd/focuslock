@@ -4,10 +4,10 @@
 
 CONFIG_DIR="$HOME/.focuslock"
 SITES_FILE="$CONFIG_DIR/sites"
-PIDFILE="/tmp/focuslock.pid"
-ALLOWED_FILE="/tmp/focuslock-allowed"
+PIDFILE="$CONFIG_DIR/timer.pid"
+ALLOWED_FILE="$CONFIG_DIR/allowed"
 HOSTS="/etc/hosts"
-LOG="/tmp/focuslock.log"
+LOG="$CONFIG_DIR/focuslock.log"
 
 # Elevate for commands that touch /etc/hosts
 COMMAND="${1:-help}"
@@ -16,6 +16,21 @@ case "$COMMAND" in
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
+
+# If a previous allow session lost its timer (e.g. reboot), reblock now
+check_stale_timer() {
+  local pidfile="$CONFIG_DIR/timer.pid"
+  local allowed="$CONFIG_DIR/allowed"
+  [ ! -f "$allowed" ] && return
+  if [ ! -f "$pidfile" ] || ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    echo "Stale allow session detected (timer died or system restarted). Re-blocking..."
+    rm -f "$pidfile"
+    [ "$EUID" -ne 0 ] && exec sudo "$0" block
+    cmd_block
+    exit $?
+  fi
+}
+check_stale_timer
 
 ensure_config() {
   mkdir -p "$CONFIG_DIR"
