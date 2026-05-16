@@ -2,7 +2,23 @@
 # focuslock — temporary site blocker for macOS
 # Config: ~/.focuslock/sites
 
-CONFIG_DIR="$HOME/.focuslock"
+# Detect a real home dir. When invoked by LaunchDaemon, $HOME is unset/empty,
+# which made CONFIG_DIR resolve to /.focuslock on the read-only root volume.
+detect_home() {
+  if [ -n "$HOME" ] && [ "$HOME" != "/" ] && [ -d "$HOME" ]; then
+    echo "$HOME"
+    return
+  fi
+  local console_user
+  console_user=$(stat -f "%Su" /dev/console 2>/dev/null)
+  if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ -d "/Users/$console_user" ]; then
+    echo "/Users/$console_user"
+    return
+  fi
+  echo "/var/root"
+}
+
+CONFIG_DIR="$(detect_home)/.focuslock"
 SITES_FILE="$CONFIG_DIR/sites"
 
 # Persistent state — survives reboot (unlike /tmp on macOS)
@@ -29,7 +45,7 @@ history_log() {
 # Elevate for commands that touch /etc/hosts or state dir
 COMMAND="${1:-help}"
 case "$COMMAND" in
-  allow|block|add|remove|check|install-daemon|uninstall-daemon)
+  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh)
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
@@ -53,6 +69,20 @@ read_sites() {
     [[ -z "$line" || "$line" == \#* ]] && continue
     echo "$line"
   done < "$SITES_FILE"
+}
+
+# Strip lines previous buggy `add` left behind, where the "domain" still
+# contained protocol/path/port. Idempotent. Runs before any sed pattern below
+# would interact with the malformed entries.
+repair_bad_entries() {
+  [ -w "$HOSTS" ] || return 0
+  # Delete /etc/hosts lines for 127.0.0.1 or ::1 whose host field has
+  # URL chars (://, /, :, ?) — those never match real DNS.
+  sed -i '' -E '/^#?[[:space:]]*(127\.0\.0\.1|::1)[[:space:]]+[^[:space:]]*(:\/\/|\/|\?|:[0-9])/d' "$HOSTS"
+  # Same cleanup in the sites file — keep blanks and `# comment` lines.
+  if [ -f "$SITES_FILE" ] && [ -w "$SITES_FILE" ]; then
+    sed -i '' -E '/^[^#[:space:]].*[:\/?]/d' "$SITES_FILE"
+  fi
 }
 
 # Many sites (YouTube/Google) resolve via IPv6 — without ::1 entries they
@@ -288,6 +318,7 @@ cmd_allow() {
     install_daemon_silent
   fi
 
+  repair_bad_entries
   migrate_ipv6_hosts
 
   # Comment out selected sites in /etc/hosts (both IPv4 and IPv6 lines)
@@ -309,6 +340,7 @@ cmd_allow() {
 cmd_block() {
   ensure_config
   ensure_state_dir
+  repair_bad_entries
   migrate_ipv6_hosts
 
   blocked_sites=""
@@ -385,6 +417,19 @@ cmd_install_daemon() {
   echo "Runs every 60s, including at boot — auto-reblocks if expiry passed."
 }
 
+# Chrome's Secure DNS (DNS-over-HTTPS) sends DNS queries directly to Cloudflare/
+# Google over HTTPS, bypassing /etc/hosts. Write enterprise policy keys that
+# force Chrome to use the OS resolver. Requires Chrome restart to take effect.
+cmd_disable_chrome_doh() {
+  local plist="/Library/Preferences/com.google.Chrome.plist"
+  defaults write "$plist" DnsOverHttpsMode -string "off" 2>/dev/null
+  defaults write "$plist" BuiltInDnsClientEnabled -bool false 2>/dev/null
+  chmod 644 "$plist" 2>/dev/null
+  echo "Chrome policy written: DnsOverHttpsMode=off, BuiltInDnsClientEnabled=false"
+  echo "Restart Chrome (quit fully, then reopen) for policy to apply."
+  echo "Verify at: chrome://policy"
+}
+
 cmd_uninstall_daemon() {
   if [ -f "$DAEMON_PLIST" ]; then
     launchctl unload "$DAEMON_PLIST" 2>/dev/null
@@ -403,9 +448,25 @@ cmd_history() {
   tail -n 50 "$HISTORY_FILE"
 }
 
+# Normalize user-supplied domain: strip protocol, www., path, port, trailing slash.
+# Without this, `focuslock add https://www.reddit.com` wrote a junk hosts line
+# (`127.0.0.1 https://www.reddit.com`) that never matched any DNS lookup.
+sanitize_domain() {
+  local raw="$1"
+  raw="${raw#http://}"
+  raw="${raw#https://}"
+  raw="${raw#www.}"
+  raw="${raw%%/*}"   # strip any path
+  raw="${raw%%:*}"   # strip any port
+  raw="${raw%%\?*}"  # strip any query
+  echo "$raw"
+}
+
 cmd_add() {
   ensure_config
-  local site="${1#www.}"
+  repair_bad_entries
+  local site
+  site=$(sanitize_domain "$1")
   [ -z "$site" ] && echo "Usage: focuslock add <domain>" && exit 1
 
   if grep -qxF "$site" "$SITES_FILE" 2>/dev/null; then
@@ -429,11 +490,17 @@ cmd_add() {
 
 cmd_remove() {
   ensure_config
-  local site="${1#www.}"
+  local site
+  site=$(sanitize_domain "$1")
   [ -z "$site" ] && echo "Usage: focuslock remove <domain>" && exit 1
 
+  # Match either the sanitized form, or any raw form left from buggy older adds
+  local raw_pattern
+  raw_pattern=$(printf '%s\n' "$1" | sed 's/[][\\.*^$/]/\\&/g')
   sed -i '' "/^${site}$/d" "$SITES_FILE"
+  [ "$raw_pattern" != "$site" ] && sed -i '' "/^${raw_pattern}$/d" "$SITES_FILE"
   sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+(www\.)?${site//./\\.}/d" "$HOSTS"
+  [ "$raw_pattern" != "$site" ] && sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+${raw_pattern//./\\.}/d" "$HOSTS"
 
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
@@ -487,8 +554,9 @@ Usage:
   focuslock status                 show timer + daemon status
   focuslock history                show allow/block history
   sudo focuslock check             reblock if expiry passed (daemon uses this)
-  sudo focuslock install-daemon    install LaunchDaemon (runs at boot, every 60s)
-  sudo focuslock uninstall-daemon  remove LaunchDaemon
+  sudo focuslock install-daemon       install LaunchDaemon (runs at boot, every 60s)
+  sudo focuslock uninstall-daemon     remove LaunchDaemon
+  sudo focuslock disable-chrome-doh   stop Chrome bypassing /etc/hosts via DoH
 
 Config: ~/.focuslock/sites (one domain per line)
 HELP
@@ -505,5 +573,6 @@ case "$COMMAND" in
   check)              cmd_check ;;
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
+  disable-chrome-doh) cmd_disable_chrome_doh ;;
   *)                  cmd_help ;;
 esac
