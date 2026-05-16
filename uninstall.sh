@@ -19,8 +19,17 @@ if [ -f "$CONFIG_DIR/sites" ]; then
   done < "$CONFIG_DIR/sites"
 fi
 
+# Remove LaunchDaemon
+DAEMON_PLIST="/Library/LaunchDaemons/dev.focuslock.reblock.plist"
+if [ -f "$DAEMON_PLIST" ]; then
+  launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
+  rm -f "$DAEMON_PLIST"
+  echo "Removed daemon."
+fi
+
 rm -f /usr/local/bin/focuslock
 rm -f /tmp/focuslock.pid /tmp/focuslock-allowed /tmp/focuslock.log
+rm -rf /var/db/focuslock
 rm -rf "$CONFIG_DIR"
 
 dscacheutil -flushcache
