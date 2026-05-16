@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `sudo focuslock update` subcommand — fetches the latest GitHub release tag, downloads its tarball, and runs the bundled `install.sh`. One command upgrades the binary, daemon, and Chrome policy in place.
+
 ### Fixed
 - Self-healing: every privileged command (`allow`, `block`, `add`, daemon `check`) now runs `repair_bad_entries` which strips any `/etc/hosts` line whose host field contains URL chars (`://`, `/`, `:port`, `?`), plus the same cleanup on the sites file. Heals existing installs damaged by the old buggy `add` without user intervention.
 - `focuslock add <url>` silently wrote a junk `/etc/hosts` line for inputs like `https://www.reddit.com` because only the `www.` prefix was stripped — protocol, paths, and ports leaked into the hosts entry and never matched any DNS lookup, so the site stayed reachable. Now sanitizes input (strips `http(s)://`, `www.`, path, port, query) before adding. `remove` accepts both sanitized and original raw form to clean up legacy bad entries.
