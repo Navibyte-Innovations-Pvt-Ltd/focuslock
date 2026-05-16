@@ -10,9 +10,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- LaunchDaemon ran with empty `$HOME`, making `CONFIG_DIR` resolve to `/.focuslock` on the read-only root volume and spamming `mkdir: Read-only file system` errors in the daemon log. Now derives a real home (via `/dev/console` console user) when `$HOME` is missing.
+- Chrome's Secure DNS (DNS-over-HTTPS) bypassed `/etc/hosts`, letting YouTube/Google load despite the host file blocks. Install now writes a managed Chrome policy (`DnsOverHttpsMode=off`, `BuiltInDnsClientEnabled=false`) so Chrome uses the OS resolver.
 - YouTube/Google etc. were not actually blocked because they resolve over IPv6 and `/etc/hosts` had only `127.0.0.1` entries — IPv6 lookup returned the real address. Now adds matching `::1` entries; allow/block sed patterns cover both protocols; auto-migration on every privileged command for existing installs.
 
 ### Added
+- `sudo focuslock disable-chrome-doh` subcommand — writes the Chrome enterprise policy that forces Chrome through the OS DNS resolver.
 - `allow` prompt now shows today's total allowed minutes + per-site last-allow timestamp (12h format) and duration, sourced from `/var/db/focuslock/history.log` — gives user context before re-allowing
 
 ---
