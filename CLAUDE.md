@@ -42,16 +42,17 @@ dscacheutil -flushcache && killall -HUP mDNSResponder 2>/dev/null
 
 ## Config
 - `~/.focuslock/sites` — one base domain per line, no `www.`, `#` = comment
-- `/tmp/focuslock.pid` — PID of background reblock timer
-- `/tmp/focuslock-allowed` — newline list of sites currently allowed (block reads this to know what to restore)
+- `/var/db/focuslock/allowed` — newline list of sites currently allowed (block restores these)
+- `/var/db/focuslock/expires-at` — epoch timestamp; daemon re-blocks when `now >= expires-at`
+- `/var/db/focuslock/history.log` — append-only allow/block audit trail
+- `/Library/LaunchDaemons/dev.focuslock.reblock.plist` — LaunchDaemon, runs `focuslock check` every 60s + at boot
 
 ## Timer mechanism
-`allow` spawns a nohup background process:
-```bash
-nohup bash -c "sleep $((MINUTES * 60)) && sudo '$SCRIPT_PATH' block" > /tmp/focuslock.log 2>&1 &
-echo $! > /tmp/focuslock.pid
-```
-Survives terminal close. Running `allow` again kills old timer and starts fresh.
+LaunchDaemon (NOT a sleep'ing nohup — that dies on shutdown):
+- `allow` writes expiry epoch to `/var/db/focuslock/expires-at`
+- LaunchDaemon `dev.focuslock.reblock` runs `focuslock check` every 60s with `RunAtLoad=true`
+- `check` reads expiry, calls `cmd_block` if `now >= expiry`
+- Survives reboot, sleep, terminal close. `/tmp` was used previously; macOS wipes `/tmp` on boot which left sites permanently allowed — that's why state moved to `/var/db/focuslock`.
 
 ## Known gotchas
 
