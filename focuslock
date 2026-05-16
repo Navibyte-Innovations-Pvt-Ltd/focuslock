@@ -45,7 +45,7 @@ history_log() {
 # Elevate for commands that touch /etc/hosts or state dir
 COMMAND="${1:-help}"
 case "$COMMAND" in
-  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh)
+  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh|update)
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
@@ -440,6 +440,43 @@ cmd_uninstall_daemon() {
   fi
 }
 
+REPO="Navibyte-Innovations-Pvt-Ltd/focuslock"
+
+cmd_update() {
+  echo "Checking latest release..."
+  local tag tmp tarball
+  tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  if [ -z "$tag" ]; then
+    echo "Could not fetch latest tag (rate-limited or offline?)."
+    exit 1
+  fi
+  echo "Latest: $tag"
+
+  tmp=$(mktemp -d)
+  tarball="${tmp}/focuslock.tar.gz"
+  if ! curl -fsSL -o "$tarball" \
+      "https://github.com/${REPO}/releases/download/${tag}/focuslock-${tag}.tar.gz"; then
+    echo "Download failed."
+    rm -rf "$tmp"
+    exit 1
+  fi
+
+  tar -xzf "$tarball" -C "$tmp" || { echo "Extract failed."; rm -rf "$tmp"; exit 1; }
+
+  if [ ! -f "$tmp/install.sh" ]; then
+    echo "Release archive missing install.sh."
+    rm -rf "$tmp"
+    exit 1
+  fi
+
+  echo "Installing $tag..."
+  bash "$tmp/install.sh"
+  local status=$?
+  rm -rf "$tmp"
+  exit "$status"
+}
+
 cmd_history() {
   if [ ! -f "$HISTORY_FILE" ]; then
     echo "No history yet."
@@ -557,6 +594,7 @@ Usage:
   sudo focuslock install-daemon       install LaunchDaemon (runs at boot, every 60s)
   sudo focuslock uninstall-daemon     remove LaunchDaemon
   sudo focuslock disable-chrome-doh   stop Chrome bypassing /etc/hosts via DoH
+  sudo focuslock update               download + install latest release from GitHub
 
 Config: ~/.focuslock/sites (one domain per line)
 HELP
@@ -574,5 +612,6 @@ case "$COMMAND" in
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
   disable-chrome-doh) cmd_disable_chrome_doh ;;
+  update)             cmd_update ;;
   *)                  cmd_help ;;
 esac
