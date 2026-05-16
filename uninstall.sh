@@ -20,7 +20,15 @@ if [ -f "$CONFIG_DIR/sites" ]; then
 fi
 
 rm -f /usr/local/bin/focuslock
-rm -f /tmp/focuslock.pid /tmp/focuslock-allowed /tmp/focuslock.log
+
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(eval echo "~$REAL_USER")
+PLIST="$REAL_HOME/Library/LaunchAgents/com.focuslock.reblock.plist"
+if [ -f "$PLIST" ]; then
+  sudo -u "$REAL_USER" launchctl unload "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+fi
+
 rm -rf "$CONFIG_DIR"
 
 dscacheutil -flushcache
