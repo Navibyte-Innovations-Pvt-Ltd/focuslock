@@ -31,7 +31,12 @@ add_host() {
   local domain="$1"
   if ! grep -qE "127\.0\.0\.1[[:space:]]+${domain//./\\.}" "$HOSTS"; then
     printf "127.0.0.1\t%s\n127.0.0.1\twww.%s\n" "$domain" "$domain" >> "$HOSTS"
-    echo "Blocked: $domain"
+    echo "Blocked (IPv4): $domain"
+  fi
+  # IPv6 — required because YouTube/Google resolve over IPv6 and bypass IPv4 entries
+  if ! grep -qE "^::1[[:space:]]+${domain//./\\.}" "$HOSTS"; then
+    printf "::1\t%s\n::1\twww.%s\n" "$domain" "$domain" >> "$HOSTS"
+    echo "Blocked (IPv6): $domain"
   fi
 }
 

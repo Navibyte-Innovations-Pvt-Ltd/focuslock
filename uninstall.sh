@@ -14,7 +14,7 @@ if [ -f "$CONFIG_DIR/sites" ]; then
     [[ -z "$site" || "$site" == \#* ]] && continue
     escaped="${site//./\\.}"
     # Remove both commented and uncommented entries from /etc/hosts
-    sed -i '' -E "/^#?[[:space:]]*127\.0\.0\.1[[:space:]]+(www\.)?${escaped}/d" "$HOSTS"
+    sed -i '' -E "/^#?[[:space:]]*(127\.0\.0\.1|::1)[[:space:]]+(www\.)?${escaped}/d" "$HOSTS"
     echo "Removed from hosts: $site"
   done < "$CONFIG_DIR/sites"
 fi

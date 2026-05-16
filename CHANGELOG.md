@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- YouTube/Google etc. were not actually blocked because they resolve over IPv6 and `/etc/hosts` had only `127.0.0.1` entries — IPv6 lookup returned the real address. Now adds matching `::1` entries; allow/block sed patterns cover both protocols; auto-migration on every privileged command for existing installs.
+
 ### Added
 - Persistent state in `/var/db/focuslock/` (expires-at, allowed, history.log) — survives reboot, replacing `/tmp` which macOS wipes on boot
 - LaunchDaemon `dev.focuslock.reblock` runs `focuslock check` every 60s and at boot — re-blocks if expiry passed, even after laptop restart or sleep (closes #7)
