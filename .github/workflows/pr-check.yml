@@ -22,18 +22,85 @@ jobs:
   changelog:
     name: changelog updated
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.head_ref }}
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-      - name: Check CHANGELOG updated
+      - name: Auto-update CHANGELOG if missing
         run: |
-          if ! git diff origin/main...HEAD -- CHANGELOG.md | grep -q '^+'; then
-            echo "❌ CHANGELOG.md must be updated in every PR"
-            echo "Add your changes under [Unreleased] in CHANGELOG.md"
-            exit 1
+          if git diff origin/main...HEAD -- CHANGELOG.md | grep -q '^+'; then
+            echo "✅ CHANGELOG.md already updated"
+            exit 0
           fi
-          echo "✅ CHANGELOG.md updated"
+
+          echo "Auto-generating CHANGELOG entries from branch commits..."
+
+          # Collect commits on this branch not in main, formatted as changelog bullets
+          ENTRIES=$(git log origin/main..HEAD --pretty=format:"- %s" | grep -v '^- Merge ')
+
+          if [ -z "$ENTRIES" ]; then
+            echo "No new commits found — nothing to add."
+            exit 0
+          fi
+
+          # Classify entries into Fixed/Added/Changed based on conventional commit prefix
+          ADDED=""
+          FIXED=""
+          CHANGED=""
+
+          while IFS= read -r line; do
+            msg="${line#- }"
+            case "$msg" in
+              fix*|Fix*)   FIXED="${FIXED}\n${line}" ;;
+              feat*|Feat*) ADDED="${ADDED}\n${line}" ;;
+              *)           CHANGED="${CHANGED}\n${line}" ;;
+            esac
+          done <<< "$ENTRIES"
+
+          # Build the block to insert under [Unreleased]
+          BLOCK=""
+          if [ -n "$ADDED" ]; then
+            BLOCK="${BLOCK}\n### Added\n$(printf '%b' "$ADDED")\n"
+          fi
+          if [ -n "$FIXED" ]; then
+            BLOCK="${BLOCK}\n### Fixed\n$(printf '%b' "$FIXED")\n"
+          fi
+          if [ -n "$CHANGED" ]; then
+            BLOCK="${BLOCK}\n### Changed\n$(printf '%b' "$CHANGED")\n"
+          fi
+
+          # Insert after the "## [Unreleased]" line
+          python3 - <<PYEOF
+          import re, os
+          with open("CHANGELOG.md", "r") as f:
+              content = f.read()
+          block = """$BLOCK"""
+          # Insert after ## [Unreleased] header line
+          updated = re.sub(
+              r'(## \[Unreleased\]\n)',
+              r'\1' + block.lstrip('\n') + '\n',
+              content,
+              count=1
+          )
+          with open("CHANGELOG.md", "w") as f:
+              f.write(updated)
+          print("CHANGELOG.md updated")
+          PYEOF
+
+      - name: Commit CHANGELOG update
+        run: |
+          if git diff --quiet CHANGELOG.md; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs(changelog): auto-update [Unreleased] from PR commits"
+          git push
