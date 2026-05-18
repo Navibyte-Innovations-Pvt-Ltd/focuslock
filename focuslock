@@ -306,9 +306,24 @@ cmd_allow() {
   # Kill existing timer
   [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null && rm -f "$PIDFILE"
 
-  # Save selected for reblock + expiry epoch (used by check + daemon)
-  printf '%s\n' "${selected[@]}" > "$ALLOWED_FILE"
-  EXPIRES_AT=$(($(date +%s) + MINUTES * 60))
+  # Merge with currently-allowed sites that haven't expired yet —
+  # a second `allow` must not orphan the first set by overwriting ALLOWED_FILE.
+  MERGED=("${selected[@]}")
+  PREV_EXP=0
+  [ -f "$EXPIRES_FILE" ] && PREV_EXP=$(cat "$EXPIRES_FILE" 2>/dev/null || echo 0)
+  if [ -f "$ALLOWED_FILE" ] && [ "$PREV_EXP" -gt "$(date +%s)" ]; then
+    while IFS= read -r _existing; do
+      _already=0
+      for _s in "${MERGED[@]}"; do [ "$_s" = "$_existing" ] && _already=1 && break; done
+      [ $_already -eq 0 ] && MERGED+=("$_existing")
+    done < "$ALLOWED_FILE"
+  fi
+
+  # Save merged list for reblock + expiry epoch (used by check + daemon)
+  printf '%s\n' "${MERGED[@]}" > "$ALLOWED_FILE"
+  NEW_EXP=$(($(date +%s) + MINUTES * 60))
+  # Keep max expiry — don't cut short a site from a prior allow
+  [ "$PREV_EXP" -gt "$NEW_EXP" ] && EXPIRES_AT=$PREV_EXP || EXPIRES_AT=$NEW_EXP
   echo "$EXPIRES_AT" > "$EXPIRES_FILE"
 
   history_log "ALLOW ${MINUTES}m: ${selected[*]}"
