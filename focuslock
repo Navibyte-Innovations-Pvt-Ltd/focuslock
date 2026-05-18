@@ -432,17 +432,31 @@ cmd_install_daemon() {
   echo "Runs every 60s, including at boot — auto-reblocks if expiry passed."
 }
 
-# Chrome's Secure DNS (DNS-over-HTTPS) sends DNS queries directly to Cloudflare/
-# Google over HTTPS, bypassing /etc/hosts. Write enterprise policy keys that
-# force Chrome to use the OS resolver. Requires Chrome restart to take effect.
+# Chrome bypasses /etc/hosts via three mechanisms:
+#   1. DNS-over-HTTPS — sends DNS directly to Cloudflare/Google over HTTPS
+#   2. Built-in DNS client — Chrome's own resolver, ignores OS /etc/hosts
+#   3. QUIC/HTTP3 — connects to cached IPs, skips DNS entirely
+# Writing to /Library/Managed Preferences/ sets MANDATORY policies (not overridable).
+# /Library/Preferences/ only sets Recommended — Chrome ignores those.
 cmd_disable_chrome_doh() {
-  local plist="/Library/Preferences/com.google.Chrome.plist"
-  defaults write "$plist" DnsOverHttpsMode -string "off" 2>/dev/null
-  defaults write "$plist" BuiltInDnsClientEnabled -bool false 2>/dev/null
-  chmod 644 "$plist" 2>/dev/null
-  echo "Chrome policy written: DnsOverHttpsMode=off, BuiltInDnsClientEnabled=false"
-  echo "Restart Chrome (quit fully, then reopen) for policy to apply."
-  echo "Verify at: chrome://policy"
+  local managed_dir="/Library/Managed Preferences"
+  local plist="${managed_dir}/com.google.Chrome.plist"
+  mkdir -p "$managed_dir"
+  # PlistBuddy handles paths with spaces; `defaults write` silently fails on them.
+  # Add key if missing, Set if already exists — idempotent.
+  _pb_set() { /usr/libexec/PlistBuddy -c "Set :$1 $2" "$plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :$1 $3 $2" "$plist"; }
+  _pb_set DnsOverHttpsMode off string
+  _pb_set BuiltInDnsClientEnabled false bool
+  _pb_set QuicAllowed false bool
+  chown root:wheel "$plist"
+  chmod 644 "$plist"
+  echo "Chrome mandatory policies written:"
+  echo "  DnsOverHttpsMode=off"
+  echo "  BuiltInDnsClientEnabled=false"
+  echo "  QuicAllowed=false"
+  echo "Quit Chrome fully (Cmd+Q) and reopen. Verify at: chrome://policy"
+  echo "(Look for Level=Mandatory, not Recommended)"
 }
 
 cmd_uninstall_daemon() {
