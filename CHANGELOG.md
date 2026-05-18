@@ -13,6 +13,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sudo focuslock update` subcommand — fetches the latest GitHub release tag, downloads its tarball, and runs the bundled `install.sh`. One command upgrades the binary, daemon, and Chrome policy in place.
 
 ### Fixed
+- `allow` overwrote `ALLOWED_FILE` on every run, silently dropping previously-allowed sites from the re-block list when a second `allow` ran while sites were still active. Now merges new selections with currently-allowed sites (if timer still active) and keeps the max expiry so no prior allow is orphaned.
+- `disable-chrome-doh` wrote to `/Library/Preferences/` (Recommended level) which Chrome ignores. Now writes to `/Library/Managed Preferences/` (Mandatory level). Also disables QUIC (`QuicAllowed=false`) which lets Chrome connect via cached IPs bypassing DNS. Switched from `defaults write` (silently fails on paths with spaces) to `PlistBuddy`.
+
+### Fixed
 - Self-healing: every privileged command (`allow`, `block`, `add`, daemon `check`) now runs `repair_bad_entries` which strips any `/etc/hosts` line whose host field contains URL chars (`://`, `/`, `:port`, `?`), plus the same cleanup on the sites file. Heals existing installs damaged by the old buggy `add` without user intervention.
 - `focuslock add <url>` silently wrote a junk `/etc/hosts` line for inputs like `https://www.reddit.com` because only the `www.` prefix was stripped — protocol, paths, and ports leaked into the hosts entry and never matched any DNS lookup, so the site stayed reachable. Now sanitizes input (strips `http(s)://`, `www.`, path, port, query) before adding. `remove` accepts both sanitized and original raw form to clean up legacy bad entries.
 - LaunchDaemon ran with empty `$HOME`, making `CONFIG_DIR` resolve to `/.focuslock` on the read-only root volume and spamming `mkdir: Read-only file system` errors in the daemon log. Now derives a real home (via `/dev/console` console user) when `$HOME` is missing.
