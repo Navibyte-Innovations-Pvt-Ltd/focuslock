@@ -14,7 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - `allow` overwrote `ALLOWED_FILE` on every run, silently dropping previously-allowed sites from the re-block list when a second `allow` ran while sites were still active. Now merges new selections with currently-allowed sites (if timer still active) and keeps the max expiry so no prior allow is orphaned.
-- `disable-chrome-doh` wrote to `/Library/Preferences/` (Recommended level) which Chrome ignores. Now writes to `/Library/Managed Preferences/` (Mandatory level). Also disables QUIC (`QuicAllowed=false`) which lets Chrome connect via cached IPs bypassing DNS. Switched from `defaults write` (silently fails on paths with spaces) to `PlistBuddy`.
+- `disable-chrome-doh` now writes to `/Library/Application Support/Google/Chrome/policies/managed/focuslock.json` instead of `/Library/Managed Preferences/`. The plist approach requires MDM enrollment — Chrome silently ignores it on standalone Macs. JSON policy files are read unconditionally as Mandatory-level policies without MDM. Also disables QUIC (`QuicAllowed=false`) to block cached-IP bypass.
 
 ### Fixed
 - Self-healing: every privileged command (`allow`, `block`, `add`, daemon `check`) now runs `repair_bad_entries` which strips any `/etc/hosts` line whose host field contains URL chars (`://`, `/`, `:port`, `?`), plus the same cleanup on the sites file. Heals existing installs damaged by the old buggy `add` without user intervention.
