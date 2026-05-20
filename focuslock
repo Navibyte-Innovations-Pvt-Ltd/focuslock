@@ -545,6 +545,39 @@ cmd_stats() {
     return
   fi
 
+  # --- determine period filter ---
+  local period="day" period_label date_filter
+  case "${1:-}" in
+    --week) period="week" ;;
+    --year) period="year" ;;
+    --day)  period="day"  ;;
+  esac
+
+  case "$period" in
+    week)
+      # Build list of dates for Mon–Sun of current week (macOS date)
+      local today_dow today_epoch mon_epoch i d
+      today_dow=$(date +%u)        # 1=Mon … 7=Sun
+      today_epoch=$(date +%s)
+      mon_epoch=$(( today_epoch - (today_dow - 1) * 86400 ))
+      date_filter=""
+      for i in 0 1 2 3 4 5 6; do
+        d=$(date -r $(( mon_epoch + i * 86400 )) +%Y-%m-%d)
+        date_filter="${date_filter}${d}|"
+      done
+      date_filter="${date_filter%|}"   # strip trailing |
+      period_label="THIS WEEK  ($(date -r $mon_epoch +%b\ %d) – $(date -r $(( mon_epoch + 6*86400 )) +%b\ %d))"
+      ;;
+    year)
+      date_filter=$(date +%Y)
+      period_label="THIS YEAR  ($(date +%Y))"
+      ;;
+    *)
+      date_filter=$(date +%Y-%m-%d)
+      period_label="TODAY  ($(date +%b\ %d))"
+      ;;
+  esac
+
   local tmpfile hourtmp
   tmpfile=$(mktemp)
   hourtmp=$(mktemp)
@@ -553,8 +586,9 @@ cmd_stats() {
   local max_mins=0
   while IFS= read -r site; do
     local result total_mins count
-    result=$(awk -F' \\| ' -v site="$site" '
+    result=$(awk -F' \\| ' -v site="$site" -v filter="$date_filter" '
       $2 ~ /^ALLOW / {
+        if (filter != "" && $1 !~ filter) next
         split($2, parts, " ")
         mins = parts[2]; sub(/m$/, "", mins)
         idx = index($2, ": ")
@@ -574,8 +608,9 @@ cmd_stats() {
   done < <(read_sites)
 
   # --- aggregate per-hour ---
-  awk -F' \\| ' '
+  awk -F' \\| ' -v filter="$date_filter" '
     $2 ~ /^ALLOW / {
+      if (filter != "" && $1 !~ filter) next
       split($1, dt, " ")
       split(dt[2], hms, ":")
       counts[hms[1]+0]++
@@ -587,7 +622,7 @@ cmd_stats() {
 
   # --- print report ---
   echo ""
-  echo "  DISTRACTION REPORT"
+  echo "  DISTRACTION REPORT — ${period_label}"
   echo "  =============================="
   echo ""
   printf "  %-22s %-9s %-7s %s\n" "SITE" "TOTAL" "ALLOWS" "USAGE"
@@ -744,7 +779,7 @@ case "$COMMAND" in
   list)               cmd_list ;;
   status)             cmd_status ;;
   history)            cmd_history ;;
-  stats)              cmd_stats ;;
+  stats)              shift; cmd_stats "$@" ;;
   check)              cmd_check ;;
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
