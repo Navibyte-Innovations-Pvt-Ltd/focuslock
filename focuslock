@@ -350,6 +350,15 @@ cmd_allow() {
   dscacheutil -flushcache
   killall -HUP mDNSResponder 2>/dev/null
 
+  # Chrome caches 127.0.0.1 internally for ~60s after OS DNS flush.
+  # Open chrome://net-internals/#dns so user can clear it without losing tabs.
+  local LOGGED_USER
+  LOGGED_USER=$(stat -f "%Su" /dev/console)
+  if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+    sudo -u "$LOGGED_USER" osascript -e 'tell application "Google Chrome" to make new tab at end of tabs of front window with properties {URL:"chrome://net-internals/#dns"}' 2>/dev/null
+    echo "  Chrome: click 'Clear host cache' in the new tab, then close it"
+  fi
+
   REBLOCK_AT=$(date -v+"${MINUTES}"M '+%I:%M %p')
   echo ""
   echo "Allowed : ${selected[*]}"
