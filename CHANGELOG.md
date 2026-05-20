@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
 ## [Unreleased]
+### Added
+
+- feat(stats): add distraction report with per-site usage table and peak hours
+
 
 ### Added
 - `sudo focuslock update` subcommand — fetches the latest GitHub release tag, downloads its tarball, and runs the bundled `install.sh`. One command upgrades the binary, daemon, and Chrome policy in place.
