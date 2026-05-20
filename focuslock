@@ -461,8 +461,16 @@ POLICY
   echo "  DnsOverHttpsMode=off"
   echo "  BuiltInDnsClientEnabled=false"
   echo "  QuicAllowed=false"
-  echo "Quit Chrome fully (Cmd+Q) and reopen. Verify at: chrome://policy"
-  echo "(Look for Level=Mandatory, not Recommended)"
+
+  local LOGGED_USER
+  LOGGED_USER=$(stat -f "%Su" /dev/console)
+  if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+    sudo -u "$LOGGED_USER" osascript -e 'tell application "Google Chrome" to quit' 2>/dev/null
+    echo "Chrome restarted to apply policies."
+    echo "Reopen Chrome — policies now active. Verify at: chrome://policy"
+  else
+    echo "Open Chrome — policies will apply on launch. Verify at: chrome://policy"
+  fi
 }
 
 cmd_uninstall_daemon() {
