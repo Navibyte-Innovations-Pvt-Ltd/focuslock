@@ -4,8 +4,15 @@ set -e
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
 
 INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="$HOME/.focuslock"
 HOSTS="/etc/hosts"
+
+# Resolve real user home — sudo resets $HOME to /var/root which is wrong
+_LOGGED_USER=$(stat -f "%Su" /dev/console 2>/dev/null)
+if [ -n "$_LOGGED_USER" ] && [ "$_LOGGED_USER" != "root" ] && [ -d "/Users/$_LOGGED_USER" ]; then
+  CONFIG_DIR="/Users/$_LOGGED_USER/.focuslock"
+else
+  CONFIG_DIR="$HOME/.focuslock"
+fi
 
 echo "Installing focuslock..."
 
