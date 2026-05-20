@@ -31,16 +31,46 @@ jobs:
           echo "SEMVER=${VERSION#v}" >> "$GITHUB_OUTPUT"
           echo "Auto version: $VERSION (previous: $LATEST)"
 
-      - name: Extract [Unreleased] changelog
+      - name: Generate changelog from commits
         id: changelog
         run: |
-          NOTES=$(awk '/^## \[Unreleased\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^[[:space:]]*$/d')
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST" ]; then
+            ENTRIES=$(git log --pretty=format:"- %s" | grep -v '^- Merge ')
+          else
+            ENTRIES=$(git log "${LATEST}..HEAD" --pretty=format:"- %s" | grep -v '^- Merge ')
+          fi
+
+          ADDED=""
+          FIXED=""
+          CHANGED=""
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            msg="${line#- }"
+            case "$msg" in
+              feat*|Feat*) ADDED="${ADDED}\n${line}" ;;
+              fix*|Fix*)   FIXED="${FIXED}\n${line}" ;;
+              *)           CHANGED="${CHANGED}\n${line}" ;;
+            esac
+          done <<< "$ENTRIES"
+
+          NOTES=""
+          if [ -n "$ADDED" ]; then
+            NOTES="${NOTES}### Added\n$(printf '%b' "$ADDED")\n\n"
+          fi
+          if [ -n "$FIXED" ]; then
+            NOTES="${NOTES}### Fixed\n$(printf '%b' "$FIXED")\n\n"
+          fi
+          if [ -n "$CHANGED" ]; then
+            NOTES="${NOTES}### Changed\n$(printf '%b' "$CHANGED")\n\n"
+          fi
+
           if [ -z "$NOTES" ]; then
             NOTES="Maintenance release."
           fi
-          echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          printf 'NOTES<<EOF\n%b\nEOF\n' "$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Build tarball
         run: |
