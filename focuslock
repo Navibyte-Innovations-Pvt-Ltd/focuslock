@@ -516,6 +516,110 @@ cmd_history() {
   tail -n 50 "$HISTORY_FILE"
 }
 
+fmt_mins() {
+  local mins=$1
+  if [ "$mins" -ge 60 ]; then
+    local h m
+    h=$((mins / 60)); m=$((mins % 60))
+    [ "$m" -gt 0 ] && echo "${h}h ${m}m" || echo "${h}h"
+  else
+    echo "${mins}m"
+  fi
+}
+
+make_bar() {
+  local val=$1 max=$2 width=${3:-20}
+  local bar="" len half i=0
+  [ "$max" -eq 0 ] && echo "" && return
+  len=$(( val * width / max ))
+  half=$(( (val * width * 2 / max) - (len * 2) ))
+  while [ $i -lt $len ]; do bar="${bar}█"; i=$((i+1)); done
+  [ "$half" -ge 1 ] && bar="${bar}▌"
+  [ "$val" -gt 0 ] && [ -z "$bar" ] && bar="▌"
+  echo "$bar"
+}
+
+cmd_stats() {
+  if [ ! -f "$HISTORY_FILE" ]; then
+    echo "No history yet."
+    return
+  fi
+
+  local tmpfile hourtmp
+  tmpfile=$(mktemp)
+  hourtmp=$(mktemp)
+
+  # --- aggregate per-site ---
+  local max_mins=0
+  while IFS= read -r site; do
+    local result total_mins count
+    result=$(awk -F' \\| ' -v site="$site" '
+      $2 ~ /^ALLOW / {
+        split($2, parts, " ")
+        mins = parts[2]; sub(/m$/, "", mins)
+        idx = index($2, ": ")
+        if (idx == 0) next
+        list = substr($2, idx+2)
+        n = split(list, sites, " ")
+        for (i=1; i<=n; i++) {
+          if (sites[i] == site) { total += mins+0; count++; break }
+        }
+      }
+      END { print total+0, count+0 }
+    ' "$HISTORY_FILE")
+    total_mins=$(echo "$result" | awk '{print $1}')
+    count=$(echo "$result" | awk '{print $2}')
+    printf '%s %s %s\n' "$total_mins" "$count" "$site" >> "$tmpfile"
+    [ "$total_mins" -gt "$max_mins" ] && max_mins="$total_mins"
+  done < <(read_sites)
+
+  # --- aggregate per-hour ---
+  awk -F' \\| ' '
+    $2 ~ /^ALLOW / {
+      split($1, dt, " ")
+      split(dt[2], hms, ":")
+      counts[hms[1]+0]++
+    }
+    END { for (h in counts) printf "%s %s\n", counts[h], h }
+  ' "$HISTORY_FILE" | sort -rn > "$hourtmp"
+  local peak_max=0
+  [ -s "$hourtmp" ] && peak_max=$(head -1 "$hourtmp" | awk '{print $1}')
+
+  # --- print report ---
+  echo ""
+  echo "  DISTRACTION REPORT"
+  echo "  =============================="
+  echo ""
+  printf "  %-22s %-9s %-7s %s\n" "SITE" "TOTAL" "ALLOWS" "USAGE"
+  printf "  %s\n" "──────────────────────────────────────────────────────────"
+
+  sort -rn "$tmpfile" | while IFS=' ' read -r mins cnt site; do
+    local pretty bar
+    pretty=$(fmt_mins "$mins")
+    bar=$(make_bar "$mins" "$max_mins" 24)
+    printf "  %-22s %-9s %-7s %s\n" "$site" "$pretty" "$cnt" "$bar"
+  done
+
+  echo ""
+  echo ""
+  printf "  %s\n" "PEAK ALLOW HOURS"
+  printf "  %s\n" "──────────────────────────────────────────────────────────"
+
+  while IFS=' ' read -r cnt hour; do
+    local label bar
+    if [ "$hour" -ge 12 ]; then
+      [ "$hour" -eq 12 ] && label="12 PM" || label="$(( hour - 12 )) PM"
+    else
+      [ "$hour" -eq 0 ] && label="12 AM" || label="${hour} AM"
+    fi
+    bar=$(make_bar "$cnt" "$peak_max" 24)
+    printf "  %6s  %-26s (%s allows)\n" "$label" "$bar" "$cnt"
+  done < "$hourtmp"
+
+  echo ""
+  rm -f "$tmpfile" "$hourtmp"
+}
+
 # Normalize user-supplied domain: strip protocol, www., path, port, trailing slash.
 # Without this, `focuslock add https://www.reddit.com` wrote a junk hosts line
 # (`127.0.0.1 https://www.reddit.com`) that never matched any DNS lookup.
@@ -621,6 +725,7 @@ Usage:
   focuslock list                   show all sites + current state
   focuslock status                 show timer + daemon status
   focuslock history                show allow/block history
+  focuslock stats                  show per-site total allowed time (ranked)
   sudo focuslock check             reblock if expiry passed (daemon uses this)
   sudo focuslock install-daemon       install LaunchDaemon (runs at boot, every 60s)
   sudo focuslock uninstall-daemon     remove LaunchDaemon
@@ -639,6 +744,7 @@ case "$COMMAND" in
   list)               cmd_list ;;
   status)             cmd_status ;;
   history)            cmd_history ;;
+  stats)              cmd_stats ;;
   check)              cmd_check ;;
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
