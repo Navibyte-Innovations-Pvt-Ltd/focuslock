@@ -527,10 +527,15 @@ DNSCONF
   launchctl unload "$DNSMASQ_PLIST" 2>/dev/null
   launchctl load -w "$DNSMASQ_PLIST"
 
+  # Pre-create log file readable by all users — dnsmasq runs as nobody
+  touch "$DNS_LOG"
+  chmod 644 "$DNS_LOG"
+
   rm -f "$DNS_IFACE_BACKUP"
   networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | while IFS= read -r svc; do
     local cur_dns
-    cur_dns=$(networksetup -getdnsservers "$svc" 2>/dev/null | tr '\n' ' ' | xargs)
+    # Avoid xargs — it chokes on "There aren't any DNS Servers set" (unmatched quote)
+    cur_dns=$(networksetup -getdnsservers "$svc" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
     printf '%s\t%s\n' "$svc" "$cur_dns" >> "$DNS_IFACE_BACKUP"
     networksetup -setdnsservers "$svc" 127.0.0.1 2>/dev/null || true
   done
