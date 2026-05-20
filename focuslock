@@ -33,6 +33,10 @@ LOG="$STATE_DIR/focuslock.log"
 DAEMON_PLIST="/Library/LaunchDaemons/dev.focuslock.reblock.plist"
 DAEMON_LABEL="dev.focuslock.reblock"
 
+DNSMASQ_PLIST="/Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist"
+DNS_LOG="$STATE_DIR/dns.log"
+DNS_IFACE_BACKUP="$STATE_DIR/dns-interfaces"
+
 ensure_state_dir() {
   [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
 }
@@ -45,7 +49,7 @@ history_log() {
 # Elevate for commands that touch /etc/hosts or state dir
 COMMAND="${1:-help}"
 case "$COMMAND" in
-  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh|update)
+  allow|block|add|remove|check|install-daemon|uninstall-daemon|disable-chrome-doh|update|install-tracker|uninstall-tracker)
     [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
     ;;
 esac
@@ -473,6 +477,95 @@ cmd_uninstall_daemon() {
 
 REPO="Navibyte-Innovations-Pvt-Ltd/focuslock"
 
+detect_brew_prefix() {
+  if [ -d "/opt/homebrew/bin" ]; then
+    echo "/opt/homebrew"
+  elif [ -f "/usr/local/bin/brew" ]; then
+    echo "/usr/local"
+  else
+    echo ""
+  fi
+}
+
+cmd_install_tracker() {
+  local brew_prefix
+  brew_prefix=$(detect_brew_prefix)
+  if [ -z "$brew_prefix" ]; then
+    echo "Homebrew not found. Install from: https://brew.sh"
+    exit 1
+  fi
+
+  local LOGGED_USER
+  LOGGED_USER=$(stat -f "%Su" /dev/console)
+
+  if [ ! -f "${brew_prefix}/bin/dnsmasq" ]; then
+    echo "Installing dnsmasq via brew..."
+    sudo -u "$LOGGED_USER" "${brew_prefix}/bin/brew" install dnsmasq
+  fi
+
+  ensure_state_dir
+
+  local conf="${brew_prefix}/etc/dnsmasq.conf"
+  cat > "$conf" << DNSCONF
+log-queries
+log-facility=${DNS_LOG}
+no-resolv
+server=8.8.8.8
+server=1.1.1.1
+listen-address=127.0.0.1
+bind-interfaces
+DNSCONF
+
+  local plist_src="${brew_prefix}/opt/dnsmasq/homebrew.mxcl.dnsmasq.plist"
+  if [ ! -f "$plist_src" ]; then
+    echo "Error: dnsmasq plist not found at $plist_src"
+    exit 1
+  fi
+  cp "$plist_src" "$DNSMASQ_PLIST"
+  chown root:wheel "$DNSMASQ_PLIST"
+  chmod 644 "$DNSMASQ_PLIST"
+  launchctl unload "$DNSMASQ_PLIST" 2>/dev/null
+  launchctl load -w "$DNSMASQ_PLIST"
+
+  rm -f "$DNS_IFACE_BACKUP"
+  networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | while IFS= read -r svc; do
+    local cur_dns
+    cur_dns=$(networksetup -getdnsservers "$svc" 2>/dev/null | tr '\n' ' ' | xargs)
+    printf '%s\t%s\n' "$svc" "$cur_dns" >> "$DNS_IFACE_BACKUP"
+    networksetup -setdnsservers "$svc" 127.0.0.1 2>/dev/null || true
+  done
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  echo "DNS tracker installed. All queries logged to: $DNS_LOG"
+  echo "Run: focuslock stats  to see visited domains"
+}
+
+cmd_uninstall_tracker() {
+  if [ -f "$DNS_IFACE_BACKUP" ]; then
+    while IFS=$'\t' read -r svc dns; do
+      if [ -z "$dns" ] || echo "$dns" | grep -qE "^There aren't|^127\.0\.0\.1$"; then
+        networksetup -setdnsservers "$svc" "Empty" 2>/dev/null || true
+      else
+        # shellcheck disable=SC2086
+        networksetup -setdnsservers "$svc" $dns 2>/dev/null || true
+      fi
+    done < "$DNS_IFACE_BACKUP"
+    rm -f "$DNS_IFACE_BACKUP"
+    echo "DNS settings restored."
+  fi
+
+  if [ -f "$DNSMASQ_PLIST" ]; then
+    launchctl unload "$DNSMASQ_PLIST" 2>/dev/null
+    rm -f "$DNSMASQ_PLIST"
+    echo "dnsmasq daemon stopped."
+  fi
+
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  echo "DNS tracker uninstalled."
+}
+
 cmd_update() {
   echo "Checking latest release..."
   local tag tmp tarball
@@ -653,6 +746,78 @@ cmd_stats() {
 
   echo ""
   rm -f "$tmpfile" "$hourtmp"
+
+  # --- DNS visit stats (only if dnsmasq tracker is installed) ---
+  if [ ! -s "$DNS_LOG" ]; then
+    return
+  fi
+
+  # Build date filter in syslog "MMM D" format (awk collapses spaces so $2+0 = day number)
+  local dns_filter dm dd
+  case "$period" in
+    week)
+      dns_filter=""
+      for i in 0 1 2 3 4 5 6; do
+        dm=$(date -r $(( mon_epoch + i * 86400 )) '+%b')
+        dd=$(date -r $(( mon_epoch + i * 86400 )) '+%e' | tr -d ' ')
+        dns_filter="${dns_filter}${dm} ${dd}|"
+      done
+      dns_filter="${dns_filter%|}"
+      ;;
+    year)
+      dns_filter=""
+      ;;
+    *)
+      dm=$(date '+%b')
+      dd=$(date '+%e' | tr -d ' ')
+      dns_filter="${dm} ${dd}"
+      ;;
+  esac
+
+  local dns_tmp
+  dns_tmp=$(mktemp)
+
+  awk -v filter="$dns_filter" '
+    /query\[A/ {
+      date_str = $1 " " ($2+0)
+      if (filter != "" && date_str !~ filter) next
+
+      domain = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /query\[/) { domain = $(i+1); break }
+      }
+      if (domain == "") next
+      if (domain ~ /^[0-9]/ || domain == "localhost" || domain ~ /\.arpa\.?$/) next
+
+      sub(/\.$/, "", domain)
+
+      n = split(domain, parts, ".")
+      sld = (n >= 2) ? parts[n-1] "." parts[n] : domain
+      counts[sld]++
+    }
+    END { for (d in counts) printf "%s %s\n", counts[d], d }
+  ' "$DNS_LOG" | sort -rn | head -15 > "$dns_tmp"
+
+  if [ -s "$dns_tmp" ]; then
+    local dns_max
+    dns_max=$(head -1 "$dns_tmp" | awk '{print $1}')
+
+    echo ""
+    echo "  TOP VISITED DOMAINS"
+    printf "  %s\n" "──────────────────────────────────────────────────────────"
+    printf "  %-30s %-8s %s\n" "DOMAIN" "QUERIES" "FREQUENCY"
+    printf "  %s\n" "──────────────────────────────────────────────────────────"
+
+    while IFS=' ' read -r cnt domain; do
+      local bar
+      bar=$(make_bar "$cnt" "$dns_max" 24)
+      printf "  %-30s %-8s %s\n" "$domain" "$cnt" "$bar"
+    done < "$dns_tmp"
+
+    echo ""
+  fi
+
+  rm -f "$dns_tmp"
 }
 
 # Normalize user-supplied domain: strip protocol, www., path, port, trailing slash.
@@ -765,6 +930,8 @@ Usage:
   sudo focuslock install-daemon       install LaunchDaemon (runs at boot, every 60s)
   sudo focuslock uninstall-daemon     remove LaunchDaemon
   sudo focuslock disable-chrome-doh   stop Chrome bypassing /etc/hosts via DoH
+  sudo focuslock install-tracker      install dnsmasq to log all DNS queries
+  sudo focuslock uninstall-tracker    remove dnsmasq DNS tracker
   sudo focuslock update               download + install latest release from GitHub
 
 Config: ~/.focuslock/sites (one domain per line)
@@ -784,6 +951,8 @@ case "$COMMAND" in
   install-daemon)     cmd_install_daemon ;;
   uninstall-daemon)   cmd_uninstall_daemon ;;
   disable-chrome-doh) cmd_disable_chrome_doh ;;
+  install-tracker)    cmd_install_tracker ;;
+  uninstall-tracker)  cmd_uninstall_tracker ;;
   update)             cmd_update ;;
   *)                  cmd_help ;;
 esac
