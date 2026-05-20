@@ -10,6 +10,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 ### Added
 
+- feat(stats): add --day/--week/--year period filters to stats command
+
+### Added
+
 - feat(stats): add distraction report with per-site usage table and peak hours
 
 
