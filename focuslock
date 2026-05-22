@@ -41,6 +41,63 @@ ensure_state_dir() {
   [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
 }
 
+# Flush OS DNS *and* dnsmasq. The DNS tracker (dnsmasq) becomes the system
+# resolver (DNS=127.0.0.1) and caches /etc/hosts, only re-reading it on SIGHUP.
+# Without the SIGHUP, allow/block edits to /etc/hosts never reach the resolver,
+# so a site stays blocked/allowed regardless of the hosts file.
+flush_dns() {
+  dscacheutil -flushcache
+  killall -HUP mDNSResponder 2>/dev/null
+  killall -HUP dnsmasq 2>/dev/null
+}
+
+# Collapse duplicate focuslock-managed /etc/hosts entries to one line per
+# (ip, host). Duplicates with conflicting state (one commented, one active)
+# caused sites to stay blocked even while "allowed": the stray active line wins.
+# State of the surviving line is derived from the current allow window:
+# commented (allowed) if the base domain is in ALLOWED_FILE and not expired,
+# otherwise active (blocked). Idempotent.
+dedup_hosts() {
+  [ -w "$HOSTS" ] || return 0
+  local now exp allowed_list
+  now=$(date +%s)
+  exp=0
+  [ -f "$EXPIRES_FILE" ] && exp=$(cat "$EXPIRES_FILE" 2>/dev/null || echo 0)
+  [ -z "$exp" ] && exp=0
+  allowed_list=""
+  if [ -f "$ALLOWED_FILE" ] && [ "$exp" -gt "$now" ]; then
+    allowed_list=$(tr '\n' ' ' < "$ALLOWED_FILE")
+  fi
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  awk -v allowed="$allowed_list" '
+    BEGIN { n=split(allowed, a, " "); for (i=1;i<=n;i++) if (a[i]!="") allow[a[i]]=1 }
+    {
+      bare=$0; sub(/^#[[:space:]]*/, "", bare)
+      if (bare ~ /^(127\.0\.0\.1|::1)[[:space:]]+[^[:space:]]/) {
+        split(bare, f, /[[:space:]]+/)
+        ip=f[1]; host=f[2]
+        if (host=="localhost") { print; next }
+        key=ip" "host
+        if (key in seen) next
+        seen[key]=1
+        base=host; sub(/^www\./, "", base)
+        if (base in allow) print "# " ip "\t" host
+        else            print ip "\t" host
+        next
+      }
+      print
+    }
+  ' "$HOSTS" > "$tmp"
+
+  # Safety: only commit if output is non-empty and still has localhost
+  if [ -s "$tmp" ] && grep -q "localhost" "$tmp"; then
+    cat "$tmp" > "$HOSTS"
+  fi
+  rm -f "$tmp"
+}
+
 history_log() {
   ensure_state_dir
   printf '%s | %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$HISTORY_FILE"
@@ -87,6 +144,7 @@ repair_bad_entries() {
   if [ -f "$SITES_FILE" ] && [ -w "$SITES_FILE" ]; then
     sed -i '' -E '/^[^#[:space:]].*[:\/?]/d' "$SITES_FILE"
   fi
+  dedup_hosts
 }
 
 # Many sites (YouTube/Google) resolve via IPv6 — without ::1 entries they
@@ -111,11 +169,16 @@ migrate_ipv6_hosts() {
 }
 
 close_chrome_tabs() {
+  # Use read_sites (skips blank/comment lines) — a blank line here becomes an
+  # empty domain, and AppleScript `tabURL contains ""` matches EVERY tab,
+  # closing all of Chrome instead of just blocked-site tabs.
   local domains_as=""
   while IFS= read -r site; do
+    [ -z "$site" ] && continue
     domains_as="${domains_as}\"${site}\", "
-  done < "$SITES_FILE"
+  done < <(read_sites)
   domains_as="${domains_as%, }"
+  [ -z "$domains_as" ] && return 0
 
   local LOGGED_USER
   LOGGED_USER=$(stat -f "%Su" /dev/console)
@@ -347,8 +410,7 @@ cmd_allow() {
     sed -i '' -E "/^(127\.0\.0\.1|::1)[[:space:]]+(www\.)?${escaped}/s/^/# /" "$HOSTS"
   done
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
 
   # Chrome caches 127.0.0.1 internally for ~60s after OS DNS flush.
   # Open chrome://net-internals/#dns so user can clear it without losing tabs.
@@ -389,8 +451,7 @@ cmd_block() {
     done < <(read_sites)
   fi
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
   close_chrome_tabs
 
   echo "$(date '+%I:%M %p'): Sites re-blocked" | tee -a "$LOG"
@@ -557,8 +618,7 @@ DNSCONF
     networksetup -setdnsservers "$svc" 127.0.0.1 2>/dev/null || true
   done
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
   echo "DNS tracker installed. All queries logged to: $DNS_LOG"
   echo "Run: focuslock stats  to see visited domains"
 }
@@ -583,8 +643,7 @@ cmd_uninstall_tracker() {
     echo "dnsmasq daemon stopped."
   fi
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
   echo "DNS tracker uninstalled."
 }
 
@@ -877,8 +936,7 @@ cmd_add() {
     printf "::1\t%s\n::1\twww.%s\n" "$site" "$site" >> "$HOSTS"
   fi
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
   echo "Added and blocked: $site"
 }
 
@@ -896,8 +954,7 @@ cmd_remove() {
   sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+(www\.)?${site//./\\.}/d" "$HOSTS"
   [ "$raw_pattern" != "$site" ] && sed -i '' -E "/(127\.0\.0\.1|::1)[[:space:]]+${raw_pattern//./\\.}/d" "$HOSTS"
 
-  dscacheutil -flushcache
-  killall -HUP mDNSResponder 2>/dev/null
+  flush_dns
   echo "Removed: $site"
 }
 
