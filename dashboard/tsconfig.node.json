@@ -5,8 +5,10 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "strict": true,
+    "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "lib": ["ES2020", "DOM"],
     "paths": {
       "@shared/*": ["./src/shared/*"]
     }
