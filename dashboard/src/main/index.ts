@@ -4,9 +4,6 @@ import { loadActivityData } from './data'
 import { createTrayIcon } from './icon'
 import type { ActivityData } from '@shared/types'
 
-declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
-declare const MAIN_WINDOW_VITE_NAME: string
-
 app.dock.hide()
 
 let tray: Tray | null = null
@@ -32,10 +29,11 @@ function createWindow(): void {
     },
   })
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  if (devUrl) {
+    win.loadURL(devUrl)
   } else {
-    win.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
   win.on('blur', () => {
@@ -92,7 +90,7 @@ app.whenReady().then(() => {
   }, 5 * 60 * 1000)
 })
 
-app.on('window-all-closed', e => e.preventDefault())
+app.on('window-all-closed', () => { /* menubar app — stay alive */ })
 app.on('before-quit', () => {
   if (refreshTimer) clearInterval(refreshTimer)
 })
