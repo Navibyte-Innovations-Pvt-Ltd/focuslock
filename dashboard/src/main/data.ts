@@ -1,0 +1,168 @@
+import { readFileSync, readdirSync, statSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
+import { spawnSync } from 'child_process'
+import type { ActivityData, DayActivity, FocuslockEvent, HourData } from '@shared/types'
+
+const HISTORY_LOG = '/var/db/focuslock/history.log'
+const CODING_LINE = join(homedir(), 'coding-line')
+
+function parseFocuslockHistory(): FocuslockEvent[] {
+  try {
+    const raw = readFileSync(HISTORY_LOG, 'utf8')
+    const events: FocuslockEvent[] = []
+    for (const line of raw.trim().split('\n')) {
+      const m = line.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}):\d{2}:\d{2} \| ALLOW (\d+)m: (.+)/)
+      if (m) {
+        events.push({
+          date: m[1],
+          hour: parseInt(m[2], 10),
+          durationMins: parseInt(m[3], 10),
+          sites: m[4].trim().split(/\s+/),
+        })
+      }
+    }
+    return events
+  } catch {
+    return []
+  }
+}
+
+function getGitCommitsByDateHour(dayCount: number): Record<string, number> {
+  const map: Record<string, number> = {}
+
+  let dirs: string[]
+  try {
+    dirs = readdirSync(CODING_LINE)
+  } catch {
+    return map
+  }
+
+  for (const dir of dirs) {
+    const repoPath = join(CODING_LINE, dir)
+    try {
+      statSync(join(repoPath, '.git'))
+    } catch {
+      continue
+    }
+
+    const result = spawnSync(
+      'git',
+      ['log', '--format=%ad', `--date=format:%Y-%m-%d %H`, `--since=${dayCount} days ago`],
+      { cwd: repoPath, encoding: 'utf8', timeout: 4000 }
+    )
+
+    if (result.status !== 0 || !result.stdout) continue
+
+    for (const line of result.stdout.trim().split('\n')) {
+      const key = line.trim()
+      if (key) map[key] = (map[key] ?? 0) + 1
+    }
+  }
+
+  return map
+}
+
+function buildHourlyForDate(
+  gitMap: Record<string, number>,
+  focusEvents: FocuslockEvent[],
+  dateStr: string
+): HourData[] {
+  const hourly: HourData[] = Array.from({ length: 24 }, () => ({ commits: 0, distrMins: 0 }))
+
+  for (const [key, count] of Object.entries(gitMap)) {
+    if (key.startsWith(dateStr)) {
+      const h = parseInt(key.slice(11, 13), 10)
+      if (h >= 0 && h < 24) hourly[h].commits += count
+    }
+  }
+
+  for (const ev of focusEvents) {
+    if (ev.date === dateStr) {
+      hourly[ev.hour].distrMins += ev.durationMins
+    }
+  }
+
+  return hourly
+}
+
+function computePatterns(
+  gitMap: Record<string, number>,
+  activeDays: string[]
+): { dead: number[]; hot: number[] } {
+  const hitCount = new Array<number>(24).fill(0)
+
+  for (const day of activeDays) {
+    for (let h = 0; h < 24; h++) {
+      const key = `${day} ${String(h).padStart(2, '0')}`
+      if ((gitMap[key] ?? 0) > 0) hitCount[h]++
+    }
+  }
+
+  const n = activeDays.length || 1
+
+  const dead = hitCount
+    .map((c, h) => ({ h, pct: Math.round((c / n) * 100) }))
+    .filter(x => x.h >= 6 && x.h <= 23 && x.pct < 20)
+    .map(x => x.h)
+
+  const hot = hitCount
+    .map((c, h) => ({ h, pct: Math.round((c / n) * 100) }))
+    .filter(x => x.h >= 6 && x.h <= 23 && x.pct >= 50)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 5)
+    .map(x => x.h)
+
+  return { dead, hot }
+}
+
+function dateStr(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+export function loadActivityData(): ActivityData {
+  const now = new Date()
+  const todayStr = dateStr(now)
+
+  const gitMap = getGitCommitsByDateHour(30)
+  const focusEvents = parseFocuslockHistory()
+
+  const last7Dates: string[] = []
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    last7Dates.push(dateStr(d))
+  }
+
+  const last7: DayActivity[] = last7Dates.map(date => ({
+    date,
+    hourly: buildHourlyForDate(gitMap, focusEvents, date),
+  }))
+
+  // Active days = days with ≥3 commits
+  const allDates = [...new Set(Object.keys(gitMap).map(k => k.slice(0, 10)))]
+  const activeDays = allDates.filter(d => {
+    let total = 0
+    for (let h = 0; h < 24; h++) {
+      total += gitMap[`${d} ${String(h).padStart(2, '0')}`] ?? 0
+    }
+    return total >= 3
+  })
+
+  const { dead, hot } = computePatterns(gitMap, activeDays)
+
+  const todayHourly = buildHourlyForDate(gitMap, focusEvents, todayStr)
+  const todayCommits = todayHourly.reduce((s, h) => s + h.commits, 0)
+  const todayEvents = focusEvents.filter(e => e.date === todayStr)
+  const todayDistrMins = todayEvents.reduce((s, e) => s + e.durationMins, 0)
+
+  return {
+    today: todayStr,
+    todayCommits,
+    todayDistrMins,
+    todayDistrCount: todayEvents.length,
+    last7,
+    deadZones: dead,
+    hotZones: hot,
+  }
+}
