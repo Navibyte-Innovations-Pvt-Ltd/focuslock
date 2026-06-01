@@ -1,5 +1,5 @@
 import './style.css'
-import type { ActivityData, HourData, ProjectCommits } from '@shared/types'
+import type { ActivityData, DistrSite, HourData, ProjectCommits } from '@shared/types'
 
 type FilterPeriod = 'today' | 'week' | 'month'
 
@@ -151,6 +151,37 @@ function renderMonthChart(data: ActivityData): void {
       labels.appendChild(lbl)
     }
   })
+}
+
+// ── Distraction sites ────────────────────────────────────────────────────────
+
+function renderDistrSites(sites: DistrSite[]): void {
+  const container = document.getElementById('distr-sites')!
+  container.innerHTML = ''
+
+  if (sites.length === 0) {
+    const el = document.createElement('div')
+    el.className = 'project-empty'
+    el.textContent = 'No distractions today 🎯'
+    container.appendChild(el)
+    return
+  }
+
+  const maxMins = sites[0].mins
+  for (const s of sites) {
+    const pct = Math.round((s.mins / maxMins) * 100)
+    const row = document.createElement('div')
+    row.className = 'project-row'
+    row.title = `${s.sessions} session${s.sessions > 1 ? 's' : ''}`
+    row.innerHTML = `
+      <div class="project-name">${s.site}</div>
+      <div class="project-bar-track">
+        <div class="project-bar-fill red" style="width:${pct}%"></div>
+      </div>
+      <div class="project-count">${fmtMins(s.mins)}</div>
+    `
+    container.appendChild(row)
+  }
 }
 
 // ── Project list ─────────────────────────────────────────────────────────────
@@ -329,6 +360,7 @@ function render(data: ActivityData): void {
   renderTodayHeatmap(data)
   renderWeekGrid(data)
   renderMonthChart(data)
+  renderDistrSites(data.todayDistrSites)
   renderInsights(data)
   showFilter(currentFilter, data)
 
