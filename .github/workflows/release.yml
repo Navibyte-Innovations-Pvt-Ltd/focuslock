@@ -79,19 +79,27 @@ jobs:
 
       - name: Build dashboard
         run: |
-          cd dashboard
-          bun install --frozen-lockfile
-          bun run build
+          if [ -d dashboard/src ]; then
+            cd dashboard
+            bun install --frozen-lockfile
+            bun run build
+          else
+            echo "No dashboard source found — skipping build"
+          fi
 
       - name: Build tarball
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           ARCHIVE="focuslock-${VERSION}.tar.gz"
+          EXTRA=""
+          if [ -d dashboard/out ]; then
+            EXTRA="dashboard/"
+          fi
           tar --exclude='dashboard/node_modules' \
               --exclude='dashboard/bun.lockb' \
               --exclude='dashboard/electron.vite.config.*.mjs' \
               -czf "$ARCHIVE" \
-              focuslock install.sh uninstall.sh README.md LICENSE CHANGELOG.md dashboard/
+              focuslock install.sh uninstall.sh README.md LICENSE CHANGELOG.md $EXTRA
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
