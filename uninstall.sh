@@ -38,7 +38,9 @@ AGENT_LABEL="dev.focuslock.dashboard"
 if [ -n "$LOGGED_USER" ] && [ "$LOGGED_USER" != "root" ]; then
   AGENT_PLIST="/Users/$LOGGED_USER/Library/LaunchAgents/${AGENT_LABEL}.plist"
   LOGGED_UID=$(id -u "$LOGGED_USER" 2>/dev/null || echo "")
-  [ -n "$LOGGED_UID" ] && launchctl bootout "gui/$LOGGED_UID/$AGENT_LABEL" 2>/dev/null || true
+  if [ -n "$LOGGED_UID" ]; then
+    launchctl bootout "gui/$LOGGED_UID/$AGENT_LABEL" 2>/dev/null || true
+  fi
   rm -f "$AGENT_PLIST"
 fi
 pkill -f "focuslock-dashboard" 2>/dev/null || true
