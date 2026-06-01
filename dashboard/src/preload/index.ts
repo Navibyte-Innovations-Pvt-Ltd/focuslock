@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('api', {
   onRefresh: (cb: (data: ActivityData) => void): void => {
     ipcRenderer.on('data-refreshed', (_event, data: ActivityData) => cb(data))
   },
+  copyReport: (text: string): Promise<void> => ipcRenderer.invoke('copy-report', text),
 })
