@@ -336,6 +336,7 @@ function showFilter(filter: FilterPeriod, data: ActivityData): void {
   document.getElementById('section-today-heatmap')!.style.display = filter === 'today' ? '' : 'none'
   document.getElementById('section-week-grid')!.style.display = filter === 'week' ? '' : 'none'
   document.getElementById('section-month-chart')!.style.display = filter === 'month' ? '' : 'none'
+  document.getElementById('section-distractions')!.style.display = filter === 'today' ? '' : 'none'
 
   // Update stats
   renderStats(data, filter)
