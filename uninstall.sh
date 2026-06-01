@@ -32,6 +32,20 @@ rm -f /tmp/focuslock.pid /tmp/focuslock-allowed /tmp/focuslock.log
 rm -rf /var/db/focuslock
 rm -rf "$CONFIG_DIR"
 
+# Remove dashboard
+LOGGED_USER=$(stat -f "%Su" /dev/console 2>/dev/null)
+AGENT_LABEL="dev.focuslock.dashboard"
+if [ -n "$LOGGED_USER" ] && [ "$LOGGED_USER" != "root" ]; then
+  AGENT_PLIST="/Users/$LOGGED_USER/Library/LaunchAgents/${AGENT_LABEL}.plist"
+  LOGGED_UID=$(id -u "$LOGGED_USER" 2>/dev/null || echo "")
+  [ -n "$LOGGED_UID" ] && launchctl bootout "gui/$LOGGED_UID/$AGENT_LABEL" 2>/dev/null || true
+  rm -f "$AGENT_PLIST"
+fi
+pkill -f "focuslock-dashboard" 2>/dev/null || true
+rm -f /usr/local/bin/focuslock-dashboard
+rm -rf /usr/local/lib/focuslock-dashboard
+rm -f /tmp/focuslock-dashboard.log /tmp/focuslock-dashboard.err
+
 dscacheutil -flushcache
 killall -HUP mDNSResponder 2>/dev/null
 
