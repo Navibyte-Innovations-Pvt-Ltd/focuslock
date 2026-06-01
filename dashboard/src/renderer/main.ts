@@ -372,6 +372,16 @@ function render(data: ActivityData): void {
     })
   })
 
+  // Refresh button
+  const refreshBtn = document.getElementById('refresh-btn')!
+  refreshBtn.addEventListener('click', async () => {
+    if (!window.api) return
+    refreshBtn.classList.add('spinning')
+    const fresh = await window.api.refreshActivity()
+    refreshBtn.classList.remove('spinning')
+    render(fresh)
+  })
+
   // Copy button
   document.getElementById('copy-btn')!.addEventListener('click', () => handleCopy(data))
 
