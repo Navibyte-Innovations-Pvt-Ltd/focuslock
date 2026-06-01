@@ -1,5 +1,5 @@
 import './style.css'
-import type { ActivityData, HourData } from '@shared/types'
+import type { ActivityData, HourData, ProjectCommits } from '@shared/types'
 
 const DISPLAY_HOURS = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
 const DAYS_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
@@ -85,6 +85,35 @@ function renderWeekGrid(data: ActivityData): void {
   })
 }
 
+function renderProjectList(containerId: string, projects: ProjectCommits[], emptyMsg: string): void {
+  const container = document.getElementById(containerId)!
+  container.innerHTML = ''
+
+  if (projects.length === 0) {
+    const el = document.createElement('div')
+    el.className = 'project-empty'
+    el.textContent = emptyMsg
+    container.appendChild(el)
+    return
+  }
+
+  const max = projects[0].commits
+
+  for (const p of projects) {
+    const pct = Math.round((p.commits / max) * 100)
+    const row = document.createElement('div')
+    row.className = 'project-row'
+    row.innerHTML = `
+      <div class="project-name" title="${p.name}">${p.name}</div>
+      <div class="project-bar-track">
+        <div class="project-bar-fill" style="width:${pct}%"></div>
+      </div>
+      <div class="project-count">${p.commits}</div>
+    `
+    container.appendChild(row)
+  }
+}
+
 function renderInsights(data: ActivityData): void {
   const container = document.getElementById('insights')!
   container.innerHTML = ''
@@ -125,6 +154,8 @@ function render(data: ActivityData): void {
 
   renderTodayHeatmap(data)
   renderWeekGrid(data)
+  renderProjectList('today-projects', data.todayProjects, 'No commits yet today')
+  renderProjectList('week-projects', data.weekProjects, 'No commits this week')
   renderInsights(data)
 
   document.getElementById('loading')!.style.display = 'none'
