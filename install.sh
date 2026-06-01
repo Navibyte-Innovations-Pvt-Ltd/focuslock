@@ -95,7 +95,7 @@ if [ -d "$DASHBOARD_SRC" ]; then
 set -e
 cd "$DASHBOARD_DEST"
 "$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
-[ ! -d out ] && "$BUN_BIN" run build
+[ -d out ] || "$BUN_BIN" run build
 SETUP
     chmod 755 "$SETUP_SCRIPT"
     chown "$_LOGGED_USER" "$SETUP_SCRIPT"
