@@ -131,5 +131,10 @@ function render(data: ActivityData): void {
   document.getElementById('app')!.style.display = 'block'
 }
 
-window.api.getActivity().then(render)
-window.api.onRefresh(render)
+if (!window.api) {
+  document.getElementById('loading')!.textContent =
+    'Open in Electron — not a browser app. Run: bun dev'
+} else {
+  window.api.getActivity().then(render)
+  window.api.onRefresh(render)
+}
