@@ -105,7 +105,7 @@ SETUP
     # Launcher script — single entry point used by LaunchAgent + subcommand
     cat > /usr/local/bin/focuslock-dashboard << 'LAUNCHER'
 #!/bin/bash
-exec /usr/local/lib/focuslock-dashboard/node_modules/.bin/electron \
+exec /usr/local/lib/focuslock-dashboard/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \
      /usr/local/lib/focuslock-dashboard/out/main/index.js "$@"
 LAUNCHER
     chmod +x /usr/local/bin/focuslock-dashboard
