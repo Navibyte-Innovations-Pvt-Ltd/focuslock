@@ -72,11 +72,26 @@ jobs:
 
           printf 'NOTES<<EOF\n%b\nEOF\n' "$NOTES" >> "$GITHUB_OUTPUT"
 
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build dashboard
+        run: |
+          cd dashboard
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Build tarball
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           ARCHIVE="focuslock-${VERSION}.tar.gz"
-          tar -czf "$ARCHIVE" focuslock install.sh uninstall.sh CLAUDE.md README.md LICENSE CHANGELOG.md
+          tar --exclude='dashboard/node_modules' \
+              --exclude='dashboard/bun.lockb' \
+              --exclude='dashboard/electron.vite.config.*.mjs' \
+              -czf "$ARCHIVE" \
+              focuslock install.sh uninstall.sh README.md LICENSE CHANGELOG.md dashboard/
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
