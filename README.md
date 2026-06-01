@@ -60,6 +60,35 @@ sudo bash install.sh
 
 ---
 
+## Update
+
+```bash
+sudo focuslock update
+```
+
+Fetches the latest release from GitHub, downloads it, and re-runs `install.sh` — updates the CLI, the reblock daemon, and the dashboard in one step. No manual steps needed.
+
+---
+
+## Dashboard
+
+focuslock ships a Mac menubar app that shows your coding activity vs distraction patterns side by side.
+
+**What it shows:**
+- Today's hour-by-hour heatmap — green = coding, red = distraction, both = you did both
+- Last 7 days grid — see your weekly rhythm at a glance
+- Pattern analysis — which hours you typically code vs idle (from 30 days of git history)
+
+**Requirements:** [bun](https://bun.sh) must be installed before running `install.sh`.
+
+The dashboard reads:
+- `/var/db/focuslock/history.log` — your focuslock allow/block events
+- `~/coding-line/*/` — git commit timestamps across your repos
+
+It installs automatically via `install.sh` and auto-starts on login via a LaunchAgent. No extra config needed.
+
+---
+
 ## Usage
 
 | Command | Needs sudo | Description |
@@ -70,6 +99,9 @@ sudo bash install.sh
 | `sudo focuslock remove <domain>` | yes | Remove a site from the block list |
 | `focuslock list` | no | Show all sites and current state |
 | `focuslock status` | no | Show timer status |
+| `focuslock history` | no | Show allow/block history |
+| `focuslock stats` | no | Show distraction stats |
+| `sudo focuslock update` | yes | Update to latest release |
 | `focuslock help` | no | Show help |
 
 ---
@@ -96,9 +128,10 @@ youtube.com
 ## How it works
 
 1. **Block** — adds `127.0.0.1 domain.com` entries to `/etc/hosts`, redirecting sites to localhost
-2. **Allow** — comments out those entries, flushes OS DNS cache
-3. **Auto-reblock** — spawns a `nohup` background timer; runs `block` when it expires
-4. **Chrome** — closes open tabs for blocked domains on reblock to clear browser DNS cache
+2. **Allow** — comments out those entries, flushes OS DNS cache, writes expiry timestamp to `/var/db/focuslock/expires-at`
+3. **Auto-reblock** — LaunchDaemon (`dev.focuslock.reblock`) runs `focuslock check` every 60s; reblocks when expiry passes. Survives reboot and sleep.
+4. **Chrome** — closes open tabs for blocked domains on reblock to force fresh DNS lookup
+5. **Dashboard** — menubar app reads `history.log` + git commit timestamps; shows coding vs distraction heatmap
 
 ---
 
@@ -106,8 +139,9 @@ youtube.com
 
 - macOS (uses `dscacheutil`, `mDNSResponder`, `osascript`)
 - bash 3.2+ (macOS default)
-- Google Chrome (optional — tab closing on reblock)
 - sudo access
+- [bun](https://bun.sh) — required for dashboard install (`curl -fsSL https://bun.sh/install | bash`)
+- Google Chrome (optional — tab closing on reblock)
 
 ---
 
