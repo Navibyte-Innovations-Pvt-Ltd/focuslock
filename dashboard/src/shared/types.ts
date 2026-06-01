@@ -5,7 +5,12 @@ export interface HourData {
 
 export interface DayActivity {
   date: string
-  hourly: HourData[] // always length 24
+  hourly: HourData[]
+}
+
+export interface ProjectCommits {
+  name: string
+  commits: number
 }
 
 export interface ActivityData {
@@ -14,8 +19,10 @@ export interface ActivityData {
   todayDistrMins: number
   todayDistrCount: number
   last7: DayActivity[]
-  deadZones: number[] // hours (0-23) where coding rate < 20%
-  hotZones: number[]  // hours (0-23) where coding rate >= 50%
+  deadZones: number[]
+  hotZones: number[]
+  todayProjects: ProjectCommits[]   // per-project commit count for today
+  weekProjects: ProjectCommits[]    // per-project totals across last 7 days
 }
 
 export interface FocuslockEvent {
