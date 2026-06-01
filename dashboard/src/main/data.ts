@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { spawnSync } from 'child_process'
-import type { ActivityData, DayActivity, FocuslockEvent, HourData } from '@shared/types'
+import type { ActivityData, DayActivity, FocuslockEvent, HourData, ProjectCommits } from '@shared/types'
 
 const HISTORY_LOG = '/var/db/focuslock/history.log'
 const CODING_LINE = join(homedir(), 'coding-line')
@@ -28,14 +28,20 @@ function parseFocuslockHistory(): FocuslockEvent[] {
   }
 }
 
-function getGitCommitsByDateHour(dayCount: number): Record<string, number> {
-  const map: Record<string, number> = {}
+interface GitData {
+  byDateHour: Record<string, number>                    // "YYYY-MM-DD HH" → count
+  byProjectDate: Record<string, Record<string, number>> // project → date → count
+}
+
+function getGitData(dayCount: number): GitData {
+  const byDateHour: Record<string, number> = {}
+  const byProjectDate: Record<string, Record<string, number>> = {}
 
   let dirs: string[]
   try {
     dirs = readdirSync(CODING_LINE)
   } catch {
-    return map
+    return { byDateHour, byProjectDate }
   }
 
   for (const dir of dirs) {
@@ -56,11 +62,19 @@ function getGitCommitsByDateHour(dayCount: number): Record<string, number> {
 
     for (const line of result.stdout.trim().split('\n')) {
       const key = line.trim()
-      if (key) map[key] = (map[key] ?? 0) + 1
+      if (!key) continue
+
+      // date-hour map (existing)
+      byDateHour[key] = (byDateHour[key] ?? 0) + 1
+
+      // project-date map (new)
+      const date = key.slice(0, 10)
+      if (!byProjectDate[dir]) byProjectDate[dir] = {}
+      byProjectDate[dir][date] = (byProjectDate[dir][date] ?? 0) + 1
     }
   }
 
-  return map
+  return { byDateHour, byProjectDate }
 }
 
 function buildHourlyForDate(
@@ -116,53 +130,78 @@ function computePatterns(
   return { dead, hot }
 }
 
-function dateStr(d: Date): string {
+function projectsForDate(
+  byProjectDate: Record<string, Record<string, number>>,
+  dateStr: string
+): ProjectCommits[] {
+  return Object.entries(byProjectDate)
+    .map(([name, dates]) => ({ name, commits: dates[dateStr] ?? 0 }))
+    .filter(p => p.commits > 0)
+    .sort((a, b) => b.commits - a.commits)
+}
+
+function projectsForDateRange(
+  byProjectDate: Record<string, Record<string, number>>,
+  dates: string[]
+): ProjectCommits[] {
+  const totals: Record<string, number> = {}
+  for (const [name, dateCounts] of Object.entries(byProjectDate)) {
+    for (const date of dates) {
+      totals[name] = (totals[name] ?? 0) + (dateCounts[date] ?? 0)
+    }
+  }
+  return Object.entries(totals)
+    .map(([name, commits]) => ({ name, commits }))
+    .filter(p => p.commits > 0)
+    .sort((a, b) => b.commits - a.commits)
+    .slice(0, 8)
+}
+
+function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
 export function loadActivityData(): ActivityData {
   const now = new Date()
-  const todayStr = dateStr(now)
+  const todayStr = toDateStr(now)
 
-  const gitMap = getGitCommitsByDateHour(30)
+  const { byDateHour, byProjectDate } = getGitData(30)
   const focusEvents = parseFocuslockHistory()
 
   const last7Dates: string[] = []
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now)
     d.setDate(d.getDate() - i)
-    last7Dates.push(dateStr(d))
+    last7Dates.push(toDateStr(d))
   }
 
   const last7: DayActivity[] = last7Dates.map(date => ({
     date,
-    hourly: buildHourlyForDate(gitMap, focusEvents, date),
+    hourly: buildHourlyForDate(byDateHour, focusEvents, date),
   }))
 
-  // Active days = days with ≥3 commits
-  const allDates = [...new Set(Object.keys(gitMap).map(k => k.slice(0, 10)))]
+  const allDates = [...new Set(Object.keys(byDateHour).map(k => k.slice(0, 10)))]
   const activeDays = allDates.filter(d => {
     let total = 0
-    for (let h = 0; h < 24; h++) {
-      total += gitMap[`${d} ${String(h).padStart(2, '0')}`] ?? 0
-    }
+    for (let h = 0; h < 24; h++) total += byDateHour[`${d} ${String(h).padStart(2, '0')}`] ?? 0
     return total >= 3
   })
 
-  const { dead, hot } = computePatterns(gitMap, activeDays)
+  const { dead, hot } = computePatterns(byDateHour, activeDays)
 
-  const todayHourly = buildHourlyForDate(gitMap, focusEvents, todayStr)
+  const todayHourly = buildHourlyForDate(byDateHour, focusEvents, todayStr)
   const todayCommits = todayHourly.reduce((s, h) => s + h.commits, 0)
   const todayEvents = focusEvents.filter(e => e.date === todayStr)
-  const todayDistrMins = todayEvents.reduce((s, e) => s + e.durationMins, 0)
 
   return {
     today: todayStr,
     todayCommits,
-    todayDistrMins,
+    todayDistrMins: todayEvents.reduce((s, e) => s + e.durationMins, 0),
     todayDistrCount: todayEvents.length,
     last7,
     deadZones: dead,
     hotZones: hot,
+    todayProjects: projectsForDate(byProjectDate, todayStr),
+    weekProjects: projectsForDateRange(byProjectDate, last7Dates),
   }
 }
