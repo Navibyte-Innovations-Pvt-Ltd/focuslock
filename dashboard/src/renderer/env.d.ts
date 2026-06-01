@@ -6,6 +6,7 @@ declare global {
       getActivity: () => Promise<ActivityData>
       onRefresh: (cb: (data: ActivityData) => void) => void
       copyReport: (text: string) => Promise<void>
+      refreshActivity: () => Promise<ActivityData>
     }
   }
 }
