@@ -10,8 +10,15 @@
     "url": "https://github.com/Navibyte-Innovations-Pvt-Ltd/focuslock.git"
   },
   "license": "MIT",
+  "workspaces": [
+    "dashboard"
+  ],
   "scripts": {
-    "postinstall": "echo '\\nfocuslock downloaded. Run: sudo bash install.sh\\n'"
+    "postinstall": "echo '\\nfocuslock downloaded. Run: sudo bash install.sh\\n'",
+    "dev": "bun run --cwd dashboard dev",
+    "build": "bun run --cwd dashboard build",
+    "start": "bun run --cwd dashboard start",
+    "typecheck": "bun run --cwd dashboard typecheck"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
