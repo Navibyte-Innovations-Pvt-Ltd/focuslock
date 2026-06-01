@@ -96,7 +96,8 @@ cd "$DASHBOARD_DEST"
 "$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
 [ ! -d out ] && "$BUN_BIN" run build
 SETUP
-    chmod +x "$SETUP_SCRIPT"
+    chmod 755 "$SETUP_SCRIPT"
+    chown "$_LOGGED_USER" "$SETUP_SCRIPT"
     sudo -u "$_LOGGED_USER" bash "$SETUP_SCRIPT"
     rm -f "$SETUP_SCRIPT"
 
