@@ -353,10 +353,16 @@ function showFilter(filter: FilterPeriod, data: ActivityData): void {
 
 // ── Main render ──────────────────────────────────────────────────────────────
 
+let latestData: ActivityData | null = null
+
 function render(data: ActivityData): void {
+  latestData = data
 
   document.getElementById('date-label')!.textContent =
     new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+
+  document.getElementById('last-updated')!.textContent =
+    `Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
 
   renderTodayHeatmap(data)
   renderWeekGrid(data)
@@ -365,35 +371,43 @@ function render(data: ActivityData): void {
   renderInsights(data)
   showFilter(currentFilter, data)
 
-  // Filter buttons
-  document.querySelectorAll('.filter-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      showFilter((btn as HTMLElement).dataset.filter as FilterPeriod, data)
-    })
-  })
-
-  // Refresh button
-  const refreshBtn = document.getElementById('refresh-btn')!
-  refreshBtn.addEventListener('click', async () => {
-    if (!window.api) return
-    refreshBtn.classList.add('spinning')
-    const fresh = await window.api.refreshActivity()
-    refreshBtn.classList.remove('spinning')
-    render(fresh)
-  })
-
-  // Copy button
-  document.getElementById('copy-btn')!.addEventListener('click', () => handleCopy(data))
-
   document.getElementById('loading')!.style.display = 'none'
   document.getElementById('app')!.style.display = 'block'
 }
 
-// ── Boot ─────────────────────────────────────────────────────────────────────
+// ── Boot — listeners attached ONCE ───────────────────────────────────────────
+
+function setup(): void {
+  // Filter tabs
+  document.querySelectorAll('.filter-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (latestData) showFilter((btn as HTMLElement).dataset.filter as FilterPeriod, latestData)
+    })
+  })
+
+  // Refresh — try/finally guarantees spinner always stops
+  const refreshBtn = document.getElementById('refresh-btn')!
+  refreshBtn.addEventListener('click', async () => {
+    if (!window.api) return
+    refreshBtn.classList.add('spinning')
+    try {
+      const fresh = await window.api.refreshActivity()
+      render(fresh)
+    } finally {
+      refreshBtn.classList.remove('spinning')
+    }
+  })
+
+  // Copy
+  document.getElementById('copy-btn')!.addEventListener('click', () => {
+    if (latestData) handleCopy(latestData)
+  })
+}
 
 if (!window.api) {
-  document.getElementById('loading')!.textContent = 'Open in Electron — not a browser app. Run: bun dev'
+  document.getElementById('loading')!.textContent = 'Open in Electron — run: bun dev'
 } else {
+  setup()
   window.api.getActivity().then(render)
-  window.api.onRefresh(data => render(data))
+  window.api.onRefresh(render)
 }
