@@ -4,8 +4,10 @@
   "description": "Mac menubar — coding activity vs distraction patterns",
   "main": "out/main/index.js",
   "scripts": {
+    "predev": "pkill -f 'coding-line/focuslock/dashboard' 2>/dev/null || true",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prestart": "pkill -f 'coding-line/focuslock/dashboard' 2>/dev/null || true",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
