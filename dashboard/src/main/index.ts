@@ -4,6 +4,13 @@ import { loadActivityData } from './data'
 import { createTrayIcon } from './icon'
 import type { ActivityData } from '@shared/types'
 
+// Single instance — if another instance is already running, focus it and quit
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+  process.exit(0)
+}
+
 app.dock.hide()
 
 let tray: Tray | null = null
@@ -75,6 +82,10 @@ ipcMain.handle('get-activity', (): ActivityData => {
 
 ipcMain.handle('copy-report', (_event, text: string): void => {
   clipboard.writeText(text)
+})
+
+app.on('second-instance', () => {
+  if (win) { positionWindow(); win.show(); win.focus() }
 })
 
 app.whenReady().then(() => {
