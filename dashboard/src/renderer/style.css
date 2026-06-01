@@ -7,7 +7,8 @@ body {
   color: #e5e5ea;
   user-select: none;
   -webkit-app-region: drag;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .no-drag { -webkit-app-region: no-drag; }
@@ -67,6 +68,23 @@ body {
 .dot-dead  { background: #ff9f0a; }
 .dot-hot   { background: #30d158; }
 .dot-alert { background: #ff453a; }
+
+/* Project list */
+.project-list { display: flex; flex-direction: column; gap: 5px; }
+.project-row { display: flex; align-items: center; gap: 8px; }
+.project-name {
+  font-size: 11px; color: #aeaeb2; width: 130px;
+  flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.project-bar-track {
+  flex: 1; height: 6px; background: #2c2c2e; border-radius: 3px; overflow: hidden;
+}
+.project-bar-fill {
+  height: 100%; background: #30d158; border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.project-count { font-size: 10px; color: #636366; width: 32px; text-align: right; flex-shrink: 0; }
+.project-empty { font-size: 11px; color: #48484a; }
 
 /* Loading */
 #loading {
