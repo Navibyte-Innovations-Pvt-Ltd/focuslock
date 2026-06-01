@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, Tray, ipcMain, screen, clipboard } from 'electron'
 import { join } from 'path'
 import { loadActivityData } from './data'
 import { createTrayIcon } from './icon'
@@ -14,7 +14,7 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 function createWindow(): void {
   win = new BrowserWindow({
     width: 380,
-    height: 660,
+    height: 700,
     show: false,
     frame: false,
     resizable: false,
@@ -71,6 +71,10 @@ function toggleWindow(): void {
 ipcMain.handle('get-activity', (): ActivityData => {
   if (!cachedData) cachedData = loadActivityData()
   return cachedData
+})
+
+ipcMain.handle('copy-report', (_event, text: string): void => {
+  clipboard.writeText(text)
 })
 
 app.whenReady().then(() => {
