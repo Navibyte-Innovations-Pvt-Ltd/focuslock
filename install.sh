@@ -88,7 +88,8 @@ if [ -d "$DASHBOARD_SRC" ]; then
     chown -R "$_LOGGED_USER:staff" "$DASHBOARD_DEST"
 
     # Install deps + build as user (not root)
-    SETUP_SCRIPT=$(mktemp /tmp/focuslock-dashboard-setup.XXXXXX.sh)
+    rm -f /tmp/focuslock-dashboard-setup.XXXXXX.sh 2>/dev/null || true
+    SETUP_SCRIPT=$(mktemp /tmp/focuslock-dashboard-setup.XXXXXX)
     cat > "$SETUP_SCRIPT" << SETUP
 #!/bin/bash
 set -e
