@@ -2,6 +2,8 @@
 # focuslock — temporary site blocker for macOS
 # Config: ~/.focuslock/sites
 
+VERSION="1.0.18"
+
 # Detect a real home dir. When invoked by LaunchDaemon, $HOME is unset/empty,
 # which made CONFIG_DIR resolve to /.focuslock on the read-only root volume.
 detect_home() {
@@ -516,6 +518,9 @@ cmd_install_daemon() {
 cmd_disable_chrome_doh() {
   local policy_dir="/Library/Application Support/Google/Chrome/policies/managed"
   local policy_file="${policy_dir}/focuslock.json"
+  local first_install=false
+  [ ! -f "$policy_file" ] && first_install=true
+
   mkdir -p "$policy_dir"
   cat > "$policy_file" << 'POLICY'
 {
@@ -526,20 +531,14 @@ cmd_disable_chrome_doh() {
 POLICY
   chown -R root:wheel "$policy_dir"
   chmod 644 "$policy_file"
-  echo "Chrome mandatory policies written to JSON policy file:"
-  echo "  ${policy_file}"
-  echo "  DnsOverHttpsMode=off"
-  echo "  BuiltInDnsClientEnabled=false"
-  echo "  QuicAllowed=false"
+  echo "Chrome DNS policies applied (DoH off, built-in DNS off, QUIC off)."
 
   local LOGGED_USER
   LOGGED_USER=$(stat -f "%Su" /dev/console)
-  if pgrep -x "Google Chrome" > /dev/null 2>&1; then
+  if [ "$first_install" = true ] && pgrep -x "Google Chrome" > /dev/null 2>&1; then
     sudo -u "$LOGGED_USER" osascript -e 'tell application "Google Chrome" to quit' 2>/dev/null
-    echo "Chrome restarted to apply policies."
-    echo "Reopen Chrome — policies now active. Verify at: chrome://policy"
-  else
-    echo "Open Chrome — policies will apply on launch. Verify at: chrome://policy"
+    echo "Chrome quit to apply policies — reopen Chrome to continue."
+    echo "Verify at: chrome://policy"
   fi
 }
 
@@ -648,7 +647,10 @@ cmd_uninstall_tracker() {
 }
 
 cmd_update() {
+  local current="v${VERSION}"
+  echo "Current version : $current"
   echo "Checking latest release..."
+
   local tag tmp tarball
   tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep -m1 '"tag_name"' | cut -d'"' -f4)
@@ -656,7 +658,15 @@ cmd_update() {
     echo "Could not fetch latest tag (rate-limited or offline?)."
     exit 1
   fi
-  echo "Latest: $tag"
+
+  if [ "$tag" = "$current" ]; then
+    echo "Already on latest ($current). Nothing to do."
+    exit 0
+  fi
+
+  echo "Latest version  : $tag"
+  echo "Updating        : $current → $tag"
+  echo ""
 
   tmp=$(mktemp -d)
   tarball="${tmp}/focuslock.tar.gz"
@@ -675,7 +685,6 @@ cmd_update() {
     exit 1
   fi
 
-  echo "Installing $tag..."
   bash "$tmp/install.sh"
   local status=$?
   rm -rf "$tmp"
