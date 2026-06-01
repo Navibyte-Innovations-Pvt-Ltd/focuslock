@@ -22,7 +22,8 @@
     "uninstall.sh",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "dashboard"
   ],
   "engines": {
     "node": ">=14"
