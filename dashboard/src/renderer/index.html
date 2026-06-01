@@ -9,47 +9,69 @@
   <div id="loading">Loading…</div>
   <div id="app" style="display:none">
 
+    <!-- Header -->
     <div class="header">
       <div class="header-top">
         <span class="header-title">Activity</span>
         <span class="header-date" id="date-label"></span>
       </div>
+
+      <!-- Filter bar -->
+      <div class="filter-row no-drag">
+        <div class="filter-tabs">
+          <button class="filter-tab active" data-filter="today">Today</button>
+          <button class="filter-tab" data-filter="week">Week</button>
+          <button class="filter-tab" data-filter="month">Month</button>
+        </div>
+        <button class="copy-btn no-drag" id="copy-btn" title="Copy report for AI">
+          <span class="copy-icon">⎘</span>
+          <span class="copy-label">Copy</span>
+        </button>
+      </div>
+
+      <!-- Stats -->
       <div class="stats-row">
         <div class="stat">
-          <span class="stat-label">Commits today</span>
-          <span class="stat-val green" id="commits-today">—</span>
+          <span class="stat-label" id="commits-label">Commits today</span>
+          <span class="stat-val green" id="commits-val">—</span>
         </div>
         <div class="stat">
           <span class="stat-label">Distracted</span>
-          <span class="stat-val red" id="distr-today">—</span>
+          <span class="stat-val red" id="distr-val">—</span>
         </div>
         <div class="stat">
           <span class="stat-label">Unlocks</span>
-          <span class="stat-val neutral" id="distr-count">—</span>
+          <span class="stat-val neutral" id="unlocks-val">—</span>
         </div>
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-title">Today — hour by hour</div>
+    <!-- TODAY: hourly heatmap -->
+    <div class="section" id="section-today-heatmap">
+      <div class="section-title">Hour by hour</div>
       <div class="heatmap no-drag" id="today-heatmap"></div>
     </div>
 
-    <div class="section">
+    <!-- WEEK: 7-day grid -->
+    <div class="section" id="section-week-grid" style="display:none">
       <div class="section-title">Last 7 days</div>
       <div class="grid7 no-drag" id="week-grid"></div>
     </div>
 
-    <div class="section">
-      <div class="section-title">Today's work</div>
-      <div class="project-list no-drag" id="today-projects"></div>
+    <!-- MONTH: 30-day bar chart -->
+    <div class="section" id="section-month-chart" style="display:none">
+      <div class="section-title">Last 30 days</div>
+      <div class="month-chart no-drag" id="month-chart"></div>
+      <div class="month-labels" id="month-labels"></div>
     </div>
 
+    <!-- Projects (content changes with filter) -->
     <div class="section">
-      <div class="section-title">This week</div>
-      <div class="project-list no-drag" id="week-projects"></div>
+      <div class="section-title" id="projects-title">Today's work</div>
+      <div class="project-list no-drag" id="projects-list"></div>
     </div>
 
+    <!-- Patterns (always visible) -->
     <div class="section">
       <div class="section-title">Your patterns</div>
       <div class="insights no-drag" id="insights"></div>
