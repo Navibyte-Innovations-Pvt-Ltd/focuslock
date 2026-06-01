@@ -184,6 +184,7 @@ export function loadActivityData(): ActivityData {
     todayProjects: projectsForDates(byProjectDate, [todayStr]),
     weekProjects: projectsForDates(byProjectDate, last7Dates),
     monthProjects: projectsForDates(byProjectDate, last30Dates),
+    todayDistrSites: distrSitesForDate(focusEvents, todayStr),
     focuslockLog: readFocuslockLog(),
   }
 }
