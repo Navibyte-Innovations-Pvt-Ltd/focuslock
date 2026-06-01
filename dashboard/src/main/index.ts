@@ -80,6 +80,11 @@ ipcMain.handle('get-activity', (): ActivityData => {
   return cachedData
 })
 
+ipcMain.handle('refresh-activity', (): ActivityData => {
+  cachedData = loadActivityData()
+  return cachedData
+})
+
 ipcMain.handle('copy-report', (_event, text: string): void => {
   clipboard.writeText(text)
 })
