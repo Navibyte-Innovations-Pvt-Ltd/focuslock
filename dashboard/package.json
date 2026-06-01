@@ -1,0 +1,22 @@
+{
+  "name": "focuslock-dashboard",
+  "version": "1.0.0",
+  "description": "Mac menubar — coding activity vs distraction patterns",
+  "main": "out/main/index.js",
+  "scripts": {
+    "predev": "pkill -f 'coding-line/focuslock/dashboard' 2>/dev/null || true",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "prestart": "pkill -f 'coding-line/focuslock/dashboard' 2>/dev/null || true",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit"
+  },
+  "dependencies": {
+    "electron": "^31.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.4.0"
+  }
+}

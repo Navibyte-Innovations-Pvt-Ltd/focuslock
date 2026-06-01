@@ -61,6 +61,93 @@ killall -HUP mDNSResponder 2>/dev/null
 # Stop Chrome bypassing /etc/hosts via Secure DNS (DoH)
 "$INSTALL_DIR/focuslock" disable-chrome-doh
 
+# ── Dashboard ──────────────────────────────────────────────────────────────
+DASHBOARD_SRC="$(dirname "$0")/dashboard"
+DASHBOARD_DEST="/usr/local/lib/focuslock-dashboard"
+AGENT_LABEL="dev.focuslock.dashboard"
+AGENT_PLIST="/Users/$_LOGGED_USER/Library/LaunchAgents/${AGENT_LABEL}.plist"
+LOGGED_UID=$(id -u "$_LOGGED_USER" 2>/dev/null || echo "")
+
+if [ -d "$DASHBOARD_SRC" ]; then
+  echo ""
+  echo "Installing focuslock dashboard..."
+
+  # Resolve bun — may live in ~/.bun/bin even when not on root's PATH
+  BUN_BIN="/Users/$_LOGGED_USER/.bun/bin/bun"
+  if [ ! -f "$BUN_BIN" ]; then
+    BUN_BIN=$(sudo -u "$_LOGGED_USER" bash -lc 'command -v bun 2>/dev/null' || true)
+  fi
+
+  if [ -z "$BUN_BIN" ]; then
+    echo "Warning: bun not found — dashboard skipped. Install bun first: https://bun.sh"
+  else
+    # Copy fresh dashboard files
+    rm -rf "$DASHBOARD_DEST"
+    mkdir -p "$DASHBOARD_DEST"
+    cp -r "$DASHBOARD_SRC/"* "$DASHBOARD_DEST/"
+    chown -R "$_LOGGED_USER:staff" "$DASHBOARD_DEST"
+
+    # Install deps + build as user (not root)
+    SETUP_SCRIPT=$(mktemp /tmp/focuslock-dashboard-setup.XXXXXX.sh)
+    cat > "$SETUP_SCRIPT" << SETUP
+#!/bin/bash
+set -e
+cd "$DASHBOARD_DEST"
+"$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
+[ ! -d out ] && "$BUN_BIN" run build
+SETUP
+    chmod +x "$SETUP_SCRIPT"
+    sudo -u "$_LOGGED_USER" bash "$SETUP_SCRIPT"
+    rm -f "$SETUP_SCRIPT"
+
+    # Launcher script — single entry point used by LaunchAgent + subcommand
+    cat > /usr/local/bin/focuslock-dashboard << 'LAUNCHER'
+#!/bin/bash
+exec /usr/local/lib/focuslock-dashboard/node_modules/.bin/electron \
+     /usr/local/lib/focuslock-dashboard/out/main/index.js "$@"
+LAUNCHER
+    chmod +x /usr/local/bin/focuslock-dashboard
+
+    # LaunchAgent plist (user-level — auto-starts on login, restarts on crash)
+    mkdir -p "/Users/$_LOGGED_USER/Library/LaunchAgents"
+    cat > "$AGENT_PLIST" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.focuslock.dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/focuslock-dashboard</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/focuslock-dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/focuslock-dashboard.err</string>
+</dict>
+</plist>
+PLIST
+    chown "$_LOGGED_USER" "$AGENT_PLIST"
+
+    # Load / reload LaunchAgent as user
+    if [ -n "$LOGGED_UID" ]; then
+      launchctl bootout "gui/$LOGGED_UID/$AGENT_LABEL" 2>/dev/null || true
+      sudo -u "$_LOGGED_USER" launchctl bootstrap "gui/$LOGGED_UID" "$AGENT_PLIST"
+    fi
+
+    echo "Dashboard installed — menubar icon appears on next login."
+    echo "Launch now: focuslock-dashboard &"
+  fi
+fi
+
 echo ""
 echo "focuslock installed."
 echo "Run: sudo focuslock allow"
