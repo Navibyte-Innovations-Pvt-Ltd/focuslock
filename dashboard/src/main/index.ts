@@ -14,7 +14,7 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 function createWindow(): void {
   win = new BrowserWindow({
     width: 380,
-    height: 520,
+    height: 660,
     show: false,
     frame: false,
     resizable: false,
