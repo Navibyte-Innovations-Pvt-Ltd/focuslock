@@ -153,3 +153,6 @@ fi
 echo ""
 echo "focuslock installed."
 echo "Run: sudo focuslock allow"
+echo ""
+echo "Optional — push-to-talk dictation (local whisper, no API, trainable on your voice):"
+echo "  focuslock dictate setup          # NOT sudo — builds whisper.cpp + hotkey"
