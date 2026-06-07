@@ -109,6 +109,17 @@ After editing `focuslock` locally, reinstall:
 sudo cp focuslock /usr/local/bin/focuslock
 ```
 
+## Dictation subsystem (`focuslock dictate`)
+Push-to-talk speech-to-text via local **whisper.cpp**. Separate from the blocker — no API, no network, trainable on the user's accent.
+
+- **Hammerspoon owns** the hotkey + typing (`~/.hammerspoon/focuslock-dictate.lua`, required from `init.lua`). Hold ⌥Space (key-down starts `rec`, key-up `terminate()`s it → exit callback transcribes → `hs.eventtap.keyStrokes`). ⌘Space is Spotlight (taken); ⌥Space normally types a non-breaking space but `hs.hotkey.bind` swallows the event.
+- **focuslock owns** build/model/transcribe. `dictate transcribe <wav>` prints plain text to **stdout only** (Hammerspoon types it) — never log to stdout or it gets typed.
+- **Runs as the logged-in user, NEVER root** — `dictate` is deliberately absent from the root-elevation `case`. Build, mic (TCC), and keystroke injection all fail or get mis-owned as root.
+- **whisper.cpp facts** (verified from README): build `cmake -B build && cmake --build build -j --config Release` (Metal default on Apple Silicon); binary `build/bin/whisper-cli`; model `ggml-<name>.bin` from `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/` (URL confirmed live via HEAD, not from README — README only points at the repo's `models/download-ggml-model.sh <name>` script as the alternative); transcribe flags `-nt -np` (no timestamps, no prints).
+- **Training loop**: every clip retained in `~/.focuslock/dictate/clips/` + JSONL `stt.log` (`{ts,audio,raw,corrected,verdict,model}`). `dictate review` fills corrections; `dictate export-dataset <dir>` writes HF audiofolder (`metadata.csv` = `file_name,transcription`).
+- Deps installed by `dictate setup`: sox, cmake, git, jq, Hammerspoon (cask). jq required for log/review/export.
+- Permissions are manual GUI grants for **Hammerspoon**: Accessibility + Microphone + Input Monitoring.
+
 ## Do not
 - Hardcode site list anywhere — always read from `~/.focuslock/sites`
 - Use `declare -A` or `mapfile` — bash 3.2 incompatible
