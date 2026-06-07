@@ -20,7 +20,8 @@ detect_home() {
   echo "/var/root"
 }
 
-CONFIG_DIR="$(detect_home)/.focuslock"
+USER_HOME="$(detect_home)"
+CONFIG_DIR="$USER_HOME/.focuslock"
 SITES_FILE="$CONFIG_DIR/sites"
 
 # Persistent state — survives reboot (unlike /tmp on macOS)
@@ -38,6 +39,24 @@ DAEMON_LABEL="dev.focuslock.reblock"
 DNSMASQ_PLIST="/Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist"
 DNS_LOG="$STATE_DIR/dns.log"
 DNS_IFACE_BACKUP="$STATE_DIR/dns-interfaces"
+
+# ── Dictation (push-to-talk speech-to-text + voice training) ────────────────
+# Hold a hotkey, speak, release → local whisper.cpp transcribes → text is typed
+# into the focused field. Every clip + transcript is retained so you can correct
+# mistakes and export a Hugging Face dataset to fine-tune whisper on YOUR accent.
+# Hammerspoon owns the hotkey + typing; this binary owns build/model/transcribe.
+# Always runs as the logged-in user (never root) — build + mic must not be
+# owned by /var/root, and AppleScript/keystroke injection fails as root.
+DICTATE_DIR="$CONFIG_DIR/dictate"
+WHISPER_SRC="$DICTATE_DIR/whisper.cpp"
+WHISPER_BIN="$WHISPER_SRC/build/bin/whisper-cli"
+DICTATE_MODELS="$DICTATE_DIR/models"
+DICTATE_MODEL_FILE="$DICTATE_DIR/model"
+DICTATE_LOG="$DICTATE_DIR/stt.log"
+DICTATE_CLIPS="$DICTATE_DIR/clips"
+HS_DIR="$USER_HOME/.hammerspoon"
+HS_LUA="$HS_DIR/focuslock-dictate.lua"
+HS_INIT="$HS_DIR/init.lua"
 
 ensure_state_dir() {
   [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
@@ -1021,9 +1040,323 @@ Usage:
   sudo focuslock install-tracker      install dnsmasq to log all DNS queries
   sudo focuslock uninstall-tracker    remove dnsmasq DNS tracker
   sudo focuslock update               download + install latest release from GitHub
+  focuslock dictate setup             install push-to-talk dictation (local whisper)
+  focuslock dictate test|review|stats train/inspect your voice model
 
 Config: ~/.focuslock/sites (one domain per line)
+Dictate: hold ⌥Space, speak, release → text types into the focused field
 HELP
+}
+
+dictate_model_name() {
+  [ -f "$DICTATE_MODEL_FILE" ] && cat "$DICTATE_MODEL_FILE" || echo "large-v3-turbo"
+}
+
+# Called by Hammerspoon on key release: transcribe the recorded wav, print the
+# plain text to stdout (Hammerspoon types it), and retain clip + transcript for
+# voice training. Logging goes to files only — stdout stays clean for typing.
+dictate_transcribe() {
+  local wav="$1"
+  [ -z "$wav" ] || [ ! -f "$wav" ] && return 1
+  # Hammerspoon's hs.task runs with launchd's minimal PATH (no Homebrew) — jq
+  # would not resolve, silently dropping every training clip. Prepend brew bin.
+  local _bp; _bp="$(detect_brew_prefix)"
+  [ -n "$_bp" ] && PATH="$_bp/bin:$PATH"
+  local model_name model_path
+  model_name="$(dictate_model_name)"
+  model_path="$DICTATE_MODELS/ggml-${model_name}.bin"
+  [ -x "$WHISPER_BIN" ] || return 1
+  [ -f "$model_path" ] || return 1
+
+  local raw
+  raw="$("$WHISPER_BIN" -m "$model_path" -f "$wav" -nt -np 2>/dev/null \
+    | tr '\n' ' ' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g')"
+
+  # stdout → Hammerspoon types this
+  printf '%s' "$raw"
+
+  # Retain clip + transcript for accent training (skip empty results)
+  [ -z "$raw" ] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  mkdir -p "$DICTATE_CLIPS"
+  local id clip ts
+  id="$(date +%s)-$$-$RANDOM"
+  clip="$DICTATE_CLIPS/${id}.wav"
+  cp "$wav" "$clip" 2>/dev/null || return 0
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -nc --arg ts "$ts" --arg audio "$clip" --arg raw "$raw" \
+        --arg model "$model_name" \
+    '{ts:$ts,audio:$audio,raw:$raw,corrected:null,verdict:null,model:$model}' \
+    >> "$DICTATE_LOG"
+}
+
+dictate_write_hammerspoon() {
+  local brew_prefix="$1"
+  local rec_bin="$brew_prefix/bin/rec"
+  local fl_bin
+  fl_bin="$(command -v focuslock 2>/dev/null || echo /usr/local/bin/focuslock)"
+  mkdir -p "$HS_DIR"
+  cat > "$HS_LUA" << LUA
+-- focuslock push-to-talk dictation (auto-generated: focuslock dictate setup)
+-- Hold ⌥Space, speak, release → local whisper transcribes → text is typed.
+local REC = "$rec_bin"
+local FL  = "$fl_bin"
+local WAV = (os.getenv("TMPDIR") or "/tmp/") .. "focuslock-dictate.wav"
+local recTask, stopping
+
+local function transcribe()
+  hs.alert.closeAll()
+  hs.alert.show("⏳ transcribing…", 5)
+  hs.task.new(FL, function(_, stdout)
+    hs.alert.closeAll()
+    local text = (stdout or ""):gsub("^%s+", ""):gsub("%s+\$", "")
+    if text ~= "" then hs.eventtap.keyStrokes(text) end
+  end, {"dictate", "transcribe", WAV}):start()
+end
+
+local function startRec()
+  if recTask then return end
+  stopping = false
+  os.remove(WAV)
+  hs.alert.show("🎙️ recording… release to stop", 60)
+  recTask = hs.task.new(REC, function()
+    recTask = nil
+    if stopping then transcribe() end
+  end, {"-q", "-c", "1", "-r", "16000", "-b", "16", WAV, "trim", "0", "60"})
+  recTask:start()
+end
+
+local function stopRec()
+  if not recTask then return end
+  stopping = true
+  recTask:terminate()   -- exit callback fires transcribe()
+end
+
+-- 3rd arg = key-down (start), 4th arg = key-up (stop): hold-to-talk.
+-- ⌥Space: binding swallows the event so no non-breaking-space is typed.
+hs.hotkey.bind({"alt"}, "space", startRec, stopRec)
+hs.alert.show("focuslock dictation ready — hold ⌥Space to talk")
+LUA
+
+  [ -f "$HS_INIT" ] || touch "$HS_INIT"
+  grep -q "focuslock-dictate" "$HS_INIT" 2>/dev/null \
+    || echo 'require("focuslock-dictate")' >> "$HS_INIT"
+}
+
+dictate_setup() {
+  if [ "$EUID" -eq 0 ]; then
+    echo "Run WITHOUT sudo:  focuslock dictate setup"
+    echo "(build + mic + keystroke injection must not run as root)"
+    exit 1
+  fi
+
+  local model="large-v3-turbo"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model) model="${2:-large-v3-turbo}"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+
+  local brew_prefix brew
+  brew_prefix="$(detect_brew_prefix)"
+  [ -z "$brew_prefix" ] && { echo "Homebrew required: https://brew.sh"; exit 1; }
+  brew="$brew_prefix/bin/brew"
+
+  echo "==> Installing dependencies (sox, cmake, git, jq, hammerspoon)…"
+  local f
+  for f in sox cmake git jq; do
+    command -v "$f" >/dev/null 2>&1 || "$brew" install "$f"
+  done
+  [ -d "/Applications/Hammerspoon.app" ] || "$brew" install --cask hammerspoon
+
+  mkdir -p "$DICTATE_DIR" "$DICTATE_MODELS" "$DICTATE_CLIPS"
+
+  echo "==> Building whisper.cpp with Metal (this takes a few minutes)…"
+  if [ ! -d "$WHISPER_SRC/.git" ]; then
+    git clone --depth 1 https://github.com/ggerganov/whisper.cpp "$WHISPER_SRC" \
+      || { echo "git clone failed"; exit 1; }
+  fi
+  ( cd "$WHISPER_SRC" && cmake -B build && cmake --build build -j --config Release )
+  [ -x "$WHISPER_BIN" ] || { echo "Build failed — $WHISPER_BIN missing"; exit 1; }
+
+  echo "==> Downloading model ggml-${model}.bin…"
+  local model_path="$DICTATE_MODELS/ggml-${model}.bin"
+  if [ ! -f "$model_path" ]; then
+    curl -L --fail -o "$model_path" \
+      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin" \
+      || { echo "Model download failed"; rm -f "$model_path"; exit 1; }
+  fi
+  echo "$model" > "$DICTATE_MODEL_FILE"
+
+  echo "==> Writing Hammerspoon hotkey config…"
+  dictate_write_hammerspoon "$brew_prefix"
+  if command -v hs >/dev/null 2>&1; then
+    hs -c "hs.reload()" 2>/dev/null
+  else
+    open -a Hammerspoon 2>/dev/null
+  fi
+
+  cat << EOF
+
+✓ Dictation installed (model: ${model}).
+
+Grant Hammerspoon these permissions — System Settings ▸ Privacy & Security:
+  • Accessibility     — to type text into apps
+  • Microphone        — to record your voice
+  • Input Monitoring  — for the global hotkey
+
+USE IT:  hold  ⌥Space , speak, release → your words type into the focused field.
+TEST  :  focuslock dictate test
+TRAIN :  focuslock dictate review   (correct mistakes — builds your dataset)
+EOF
+}
+
+# Record 4s and show the transcription — verifies build + model + mic.
+dictate_test() {
+  command -v rec >/dev/null 2>&1 || PATH="$(detect_brew_prefix)/bin:$PATH"
+  local wav; wav="$(mktemp -t fldictate)"
+  echo "Recording 4s — speak now…"
+  rec -q -c 1 -r 16000 -b 16 "$wav.wav" trim 0 4 2>/dev/null
+  echo "Transcribing…"
+  local text; text="$(dictate_transcribe "$wav.wav")"
+  rm -f "$wav" "$wav.wav"
+  echo ""
+  echo "Heard: \"$text\""
+}
+
+# Walk un-reviewed clips: confirm / correct / play / skip / delete.
+# Corrected pairs become the training dataset (export-dataset).
+dictate_review() {
+  command -v jq >/dev/null 2>&1 || { echo "jq required: brew install jq"; exit 1; }
+  [ -f "$DICTATE_LOG" ] || { echo "No dictations logged yet. Use the hotkey first."; return; }
+
+  local pending; pending=$(jq -c 'select(.verdict==null)' "$DICTATE_LOG" 2>/dev/null)
+  [ -z "$pending" ] && { echo "Nothing to review — all clips confirmed."; return; }
+
+  local count; count=$(printf '%s\n' "$pending" | grep -c .)
+  echo "$count clip(s) to review.  [Enter]=correct  e=edit  p=play  s=skip  d=delete"
+  echo ""
+
+  local tmp; tmp=$(mktemp)
+  # Stream every record; mutate only the ones being reviewed.
+  while IFS= read -r rec; do
+    local verdict; verdict=$(printf '%s' "$rec" | jq -r '.verdict')
+    if [ "$verdict" != "null" ]; then
+      printf '%s\n' "$rec" >> "$tmp"; continue
+    fi
+    local audio raw
+    audio=$(printf '%s' "$rec" | jq -r '.audio')
+    raw=$(printf '%s' "$rec"   | jq -r '.raw')
+
+    local choice
+    while true; do
+      printf 'Heard: "%s"\n  > ' "$raw"
+      read -r choice < /dev/tty
+      case "$choice" in
+        p|P) [ -f "$audio" ] && afplay "$audio" 2>/dev/null || echo "  (clip missing)"; continue ;;
+        *)   break ;;
+      esac
+    done
+
+    case "$choice" in
+      "")  # correct as-is
+        printf '%s' "$rec" | jq -c '.verdict="correct"' >> "$tmp" ;;
+      e|E)
+        printf '  Correct text: '
+        local fixed; read -r fixed < /dev/tty
+        printf '%s' "$rec" | jq -c --arg c "$fixed" '.corrected=$c | .verdict="corrected"' >> "$tmp" ;;
+      d|D)
+        [ -f "$audio" ] && rm -f "$audio"
+        echo "  deleted." ;;   # drop record entirely
+      *)  # skip — leave un-reviewed
+        printf '%s\n' "$rec" >> "$tmp" ;;
+    esac
+    echo ""
+  done <<< "$(jq -c '.' "$DICTATE_LOG")"
+
+  mv "$tmp" "$DICTATE_LOG"
+  echo "Saved. Run  focuslock dictate export-dataset <dir>  when ready to train."
+}
+
+# Accuracy summary from the correction log.
+dictate_stats() {
+  command -v jq >/dev/null 2>&1 || { echo "jq required: brew install jq"; exit 1; }
+  [ -f "$DICTATE_LOG" ] || { echo "No dictations logged yet."; return; }
+  jq -s '
+    (map(select(.verdict!=null)) | length)             as $reviewed |
+    (map(select(.verdict=="correct")) | length)        as $ok |
+    (map(select(.verdict=="corrected")) | length)      as $fixed |
+    "Dictation accuracy",
+    "  Total transcriptions : \(length)",
+    "  Reviewed             : \($reviewed)",
+    "  Correct first try    : \($ok)",
+    "  Needed correction    : \($fixed)"
+  ' -r "$DICTATE_LOG"
+  echo ""
+  echo "Most-corrected (raw → corrected):"
+  jq -r 'select(.verdict=="corrected") | "  \(.raw)  →  \(.corrected)"' "$DICTATE_LOG" \
+    | sort | uniq -c | sort -rn | head -5
+}
+
+# Export confirmed clips as a Hugging Face audiofolder dataset for fine-tuning.
+dictate_export_dataset() {
+  command -v jq >/dev/null 2>&1 || { echo "jq required: brew install jq"; exit 1; }
+  local out="$1"
+  [ -z "$out" ] && { echo "Usage: focuslock dictate export-dataset <dir>"; exit 1; }
+  [ -f "$DICTATE_LOG" ] || { echo "No dictations logged yet."; exit 1; }
+
+  mkdir -p "$out"
+  local meta="$out/metadata.csv"
+  echo "file_name,transcription" > "$meta"
+
+  local n=0
+  while IFS= read -r rec; do
+    local audio text base
+    audio=$(printf '%s' "$rec" | jq -r '.audio')
+    text=$(printf '%s' "$rec"  | jq -r '.corrected // .raw')
+    [ -f "$audio" ] || continue
+    base=$(basename "$audio")
+    cp "$audio" "$out/$base" 2>/dev/null || continue
+    # CSV-escape the transcription (wrap in quotes, double internal quotes)
+    text=$(printf '%s' "$text" | sed 's/"/""/g')
+    printf '%s,"%s"\n' "$base" "$text" >> "$meta"
+    n=$((n+1))
+  done <<< "$(jq -c 'select(.verdict=="correct" or .verdict=="corrected")' "$DICTATE_LOG")"
+
+  echo "Exported $n confirmed clip(s) → $out"
+  echo "Load in Python:  load_dataset(\"audiofolder\", data_dir=\"$out\")"
+}
+
+dictate_help() {
+  cat << 'HELP'
+focuslock dictate — push-to-talk speech-to-text (local whisper.cpp)
+
+  focuslock dictate setup [--model small|medium|large-v3-turbo]
+        build whisper.cpp, download model, install hotkey (one-time)
+  focuslock dictate test            record 4s + show transcription
+  focuslock dictate review          correct mistakes → builds training data
+  focuslock dictate stats           accuracy summary
+  focuslock dictate export-dataset <dir>
+        export confirmed clips as a Hugging Face dataset to fine-tune
+  focuslock dictate transcribe <wav>   (internal — used by Hammerspoon)
+
+Usage: hold ⌥Space, speak, release → your words type into the focused field.
+HELP
+}
+
+cmd_dictate() {
+  local sub="${1:-help}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    setup)          dictate_setup "$@" ;;
+    transcribe)     dictate_transcribe "$@" ;;
+    test)           dictate_test ;;
+    review)         dictate_review ;;
+    stats)          dictate_stats ;;
+    export-dataset) dictate_export_dataset "$@" ;;
+    *)              dictate_help ;;
+  esac
 }
 
 case "$COMMAND" in
@@ -1042,5 +1375,6 @@ case "$COMMAND" in
   install-tracker)    cmd_install_tracker ;;
   uninstall-tracker)  cmd_uninstall_tracker ;;
   update)             cmd_update ;;
+  dictate)            shift; cmd_dictate "$@" ;;
   *)                  cmd_help ;;
 esac
