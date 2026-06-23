@@ -5,7 +5,43 @@ import { spawnSync } from 'child_process'
 import type { ActivityData, DayActivity, DistrSite, FocuslockEvent, HourData, ProjectCommits } from '@shared/types'
 
 const HISTORY_LOG = '/var/db/focuslock/history.log'
+const USAGE_LOG = join(homedir(), '.focuslock', 'usage.log')
 const CODING_LINE = join(homedir(), 'coding-line')
+
+// usage.log is appended by `focuslock track-tick` (the user LaunchAgent), one
+// line per 20s poll where a tracked site was the frontmost browser tab:
+//   "YYYY-MM-DD youtube.com 20"
+// Summing seconds per domain for a day = real time-on-site, the honest answer to
+// "how much YouTube did I use today". This replaces the old per-site bars, which
+// credited the whole unlock-window duration to every site in the batch (so all
+// sites showed identical totals). Local date in the file → matches focuslock's
+// own day stamps and the user's wall clock.
+function usageSitesForDate(dateStr: string): DistrSite[] {
+  let raw: string
+  try { raw = readFileSync(USAGE_LOG, 'utf8') } catch { return [] }
+  const secs: Record<string, number> = {}
+  const ticks: Record<string, number> = {}
+  for (const line of raw.trim().split('\n')) {
+    const p = line.trim().split(/\s+/)
+    if (p.length < 3 || p[0] !== dateStr) continue
+    const s = parseInt(p[2], 10)
+    if (!Number.isFinite(s)) continue
+    secs[p[1]] = (secs[p[1]] ?? 0) + s
+    ticks[p[1]] = (ticks[p[1]] ?? 0) + 1
+  }
+  return Object.entries(secs)
+    .map(([site, sc]) => ({ site, mins: Math.max(1, Math.round(sc / 60)), sessions: ticks[site] ?? 0 }))
+    .sort((a, b) => b.mins - a.mins)
+}
+
+// usage.log stamps the LOCAL day; toDateStr() below is UTC, so usage lookups use
+// this instead to avoid an off-by-one near midnight in non-UTC timezones.
+function localDateStr(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 function parseFocuslockHistory(): FocuslockEvent[] {
   try {
@@ -123,21 +159,6 @@ function projectsForDates(
     .slice(0, limit)
 }
 
-function distrSitesForDate(events: FocuslockEvent[], dateStr: string): DistrSite[] {
-  const map: Record<string, { mins: number; sessions: number }> = {}
-  for (const ev of events) {
-    if (ev.date !== dateStr) continue
-    for (const site of ev.sites) {
-      if (!map[site]) map[site] = { mins: 0, sessions: 0 }
-      map[site].mins += ev.durationMins
-      map[site].sessions += 1
-    }
-  }
-  return Object.entries(map)
-    .map(([site, v]) => ({ site, mins: v.mins, sessions: v.sessions }))
-    .sort((a, b) => b.mins - a.mins)
-}
-
 function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
@@ -172,10 +193,15 @@ export function loadActivityData(): ActivityData {
   const todayHourly = buildHourlyForDate(byDateHour, focusEvents, todayStr)
   const todayEvents = focusEvents.filter(e => e.date === todayStr)
 
+  // Real per-site time-on-site for today (empty until the usage agent has run).
+  const usageToday = usageSitesForDate(localDateStr(now))
+
   return {
     today: todayStr,
     todayCommits: todayHourly.reduce((s, h) => s + h.commits, 0),
-    todayDistrMins: todayEvents.reduce((s, e) => s + e.durationMins, 0),
+    // DISTRACTED = real minutes actually spent on tracked sites (was: sum of
+    // unlock-window durations, which wildly overcounted).
+    todayDistrMins: usageToday.reduce((s, x) => s + x.mins, 0),
     todayDistrCount: todayEvents.length,
     last7,
     last30,
@@ -184,7 +210,7 @@ export function loadActivityData(): ActivityData {
     todayProjects: projectsForDates(byProjectDate, [todayStr]),
     weekProjects: projectsForDates(byProjectDate, last7Dates),
     monthProjects: projectsForDates(byProjectDate, last30Dates),
-    todayDistrSites: distrSitesForDate(focusEvents, todayStr),
+    todayDistrSites: usageToday,
     focuslockLog: readFocuslockLog(),
   }
 }
