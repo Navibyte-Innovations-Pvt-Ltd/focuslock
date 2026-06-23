@@ -689,6 +689,9 @@ cmd_install_usage() {
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>${USAGE_INTERVAL}</integer>
   <key>ProcessType</key><string>Background</string>
+  <!-- Must run in the user's GUI (Aqua) session — AppleScript/Automation to read
+       browser tabs fails outside it. -->
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
 </plist>
 PLIST
