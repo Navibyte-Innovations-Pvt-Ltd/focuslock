@@ -33,6 +33,14 @@ DEFAULTS
   echo "Created config: $CONFIG_DIR/sites"
 fi
 
+# This script runs as root (self-elevates), so the dir + files above are created
+# root-owned. The config lives in the USER's home and must be writable by the
+# user — the dashboard, the Hammerspoon usage tracker, and `focuslock dictate`
+# all run as the user and write here. Hand it back, or those writes fail silently.
+if [ -n "$_LOGGED_USER" ] && [ "$_LOGGED_USER" != "root" ]; then
+  chown -R "$_LOGGED_USER:staff" "$CONFIG_DIR"
+fi
+
 # Add default sites to /etc/hosts if not present
 add_host() {
   local domain="$1"
