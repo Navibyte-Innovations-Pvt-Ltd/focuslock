@@ -53,10 +53,24 @@ function positionWindow(): void {
 
   const trayBounds = tray.getBounds()
   const [winW, winH] = win.getSize()
-  const { workArea } = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y })
 
-  let x = Math.round(trayBounds.x + trayBounds.width / 2 - winW / 2)
-  let y = Math.round(trayBounds.y + trayBounds.height + 4)
+  // Anchor to the display under the cursor (the screen the user is actually on),
+  // falling back to the tray's own display. The menu-bar tray reports bounds on
+  // the active-menu-bar display, which is often not where the user is working.
+  const cursor = screen.getCursorScreenPoint()
+  const cursorDisplay = screen.getDisplayNearestPoint(cursor)
+  const trayDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y })
+  const sameDisplay = cursorDisplay.id === trayDisplay.id
+  const { workArea } = cursorDisplay
+
+  // If the tray is on this display, drop the window under the tray icon;
+  // otherwise center it near the cursor at the top of the current display.
+  let x = sameDisplay
+    ? Math.round(trayBounds.x + trayBounds.width / 2 - winW / 2)
+    : Math.round(cursor.x - winW / 2)
+  let y = sameDisplay
+    ? Math.round(trayBounds.y + trayBounds.height + 4)
+    : workArea.y + 4
 
   x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - winW))
   y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - winH))
