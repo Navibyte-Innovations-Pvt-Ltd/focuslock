@@ -157,6 +157,16 @@ amazon.in
 youtube.com
 DEFAULTS
   fi
+  # Privileged subcommands (allow/block/add/…) self-elevate, so anything created
+  # here lands root-owned in the USER's home. The dashboard + Hammerspoon usage
+  # tracker + dictate all run as the user and write to CONFIG_DIR — if it's
+  # root-owned, those writes fail silently. Hand ownership back when running as root.
+  if [ "$EUID" -eq 0 ]; then
+    local owner; owner=$(stat -f "%Su" /dev/console 2>/dev/null)
+    if [ -n "$owner" ] && [ "$owner" != "root" ]; then
+      chown -R "$owner:staff" "$CONFIG_DIR" 2>/dev/null
+    fi
+  fi
 }
 
 read_sites() {
