@@ -36,6 +36,20 @@ LOG="$STATE_DIR/focuslock.log"
 DAEMON_PLIST="/Library/LaunchDaemons/dev.focuslock.reblock.plist"
 DAEMON_LABEL="dev.focuslock.reblock"
 
+# ── Per-site usage tracking (real time-on-site, NOT the dnsmasq DNS tracker) ──
+# A user LaunchAgent polls every 20s: which browser tab is in front → which of
+# your tracked sites it is → credits 20s to that site for today. Lets the
+# dashboard answer "how much YouTube did I actually use today" with real minutes
+# instead of the unlock-window duration (which credited every site in a batch
+# the full window, so all sites showed identical totals).
+# Runs as the logged-in user, NEVER root: AppleScript can't read browser tabs as
+# root (-1743) and the log must be owned by the user, not /var/root.
+USAGE_LOG="$CONFIG_DIR/usage.log"
+USAGE_AGENT_LABEL="dev.focuslock.usage"
+USAGE_AGENT_PLIST="$USER_HOME/Library/LaunchAgents/${USAGE_AGENT_LABEL}.plist"
+USAGE_INTERVAL=20   # seconds per poll; also the time credited per matched tick
+USAGE_IDLE_CUTOFF=60  # skip ticks when the machine has been idle longer (AFK)
+
 DNSMASQ_PLIST="/Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist"
 DNS_LOG="$STATE_DIR/dns.log"
 DNS_IFACE_BACKUP="$STATE_DIR/dns-interfaces"
@@ -583,6 +597,135 @@ detect_brew_prefix() {
   fi
 }
 
+# One usage poll. Invoked every USAGE_INTERVAL seconds by the user LaunchAgent.
+# Runs as the logged-in user (NOT root) — deliberately absent from the root
+# elevation case. Records 20s of attention to a tracked site only when:
+#   - the machine is not idle (you're actually present), AND
+#   - the frontmost app is Chrome/Safari, AND
+#   - that browser's active tab is one of your tracked sites.
+# Anything else (other app, untracked site, AFK) → record nothing.
+cmd_track_tick() {
+  # Refuse to run as root — would mis-own usage.log and fail AppleScript (-1743)
+  [ "$EUID" -eq 0 ] && exit 0
+  mkdir -p "$CONFIG_DIR"
+
+  # AFK guard: HIDIdleTime is nanoseconds since last input
+  local idle_ns idle_secs
+  idle_ns=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/{print $NF; exit}')
+  [ -z "$idle_ns" ] && idle_ns=0
+  idle_secs=$(( idle_ns / 1000000000 ))
+  [ "$idle_secs" -gt "$USAGE_IDLE_CUTOFF" ] && exit 0
+
+  # Frontmost app name via lsappinfo — no AppleScript, so no TCC for this part
+  local front_asn front_name
+  front_asn=$(lsappinfo front 2>/dev/null)
+  [ -z "$front_asn" ] && exit 0
+  front_name=$(lsappinfo info -only name "$front_asn" 2>/dev/null | awk -F'"' '{print $4}')
+
+  # Only read a tab URL if a supported browser is actually frontmost AND running.
+  # pgrep guard mirrors close_chrome_tabs: osascript would otherwise launch the
+  # app and hang. Reading the tab URL needs one-time Automation permission.
+  local url=""
+  case "$front_name" in
+    "Google Chrome")
+      pgrep -x "Google Chrome" >/dev/null 2>&1 || exit 0
+      url=$(osascript -e 'tell application "Google Chrome" to get URL of active tab of front window' 2>/dev/null)
+      ;;
+    "Safari")
+      pgrep -x "Safari" >/dev/null 2>&1 || exit 0
+      url=$(osascript -e 'tell application "Safari" to get URL of current tab of front window' 2>/dev/null)
+      ;;
+    *)
+      exit 0 ;;
+  esac
+  [ -z "$url" ] && exit 0
+
+  # URL → bare host (strip scheme, path, port; lowercase)
+  local host
+  host=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##; s#:[0-9]+$##' | tr 'A-Z' 'a-z')
+  [ -z "$host" ] && exit 0
+
+  # Match host to a tracked base domain, subdomain-aware:
+  # youtube.com, www.youtube.com, m.youtube.com, music.youtube.com → youtube.com
+  local matched=""
+  while IFS= read -r site; do
+    [ -z "$site" ] && continue
+    if [ "$host" = "$site" ] || [[ "$host" == *."$site" ]]; then
+      matched="$site"; break
+    fi
+  done < <(read_sites)
+  [ -z "$matched" ] && exit 0
+
+  # Append a tick: LOCAL date, domain, seconds credited. Local date matches how
+  # history_log stamps days, so the dashboard's "today" lines up.
+  printf '%s %s %s\n' "$(date '+%Y-%m-%d')" "$matched" "$USAGE_INTERVAL" >> "$USAGE_LOG"
+}
+
+# Install the user LaunchAgent that runs cmd_track_tick every USAGE_INTERVAL s.
+# User-level (not root): the agent must run in the user's GUI session for
+# AppleScript/Automation to work.
+cmd_install_usage() {
+  if [ "$EUID" -eq 0 ]; then
+    echo "Run without sudo — usage tracking is a per-user agent, not a root daemon."
+    exit 1
+  fi
+
+  local self
+  self=$(command -v focuslock || echo "$0")
+  case "$self" in /*) ;; *) self="$(pwd)/$self" ;; esac
+
+  mkdir -p "$(dirname "$USAGE_AGENT_PLIST")"
+  cat > "$USAGE_AGENT_PLIST" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${USAGE_AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${self}</string>
+    <string>track-tick</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>${USAGE_INTERVAL}</integer>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
+PLIST
+
+  # Load into the user's GUI session (bootstrap gui/$uid) so AppleScript can
+  # reach the browser; fall back to legacy load if bootstrap is unavailable.
+  local uid; uid=$(id -u)
+  launchctl bootout "gui/$uid/$USAGE_AGENT_LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" "$USAGE_AGENT_PLIST" 2>/dev/null \
+    || { launchctl unload "$USAGE_AGENT_PLIST" 2>/dev/null; launchctl load -w "$USAGE_AGENT_PLIST" 2>/dev/null; }
+
+  echo "Usage tracking installed (polls every ${USAGE_INTERVAL}s)."
+  echo ""
+  echo "ONE-TIME permission: the first time a tracked site is frontmost, macOS"
+  echo "asks to let focuslock control Chrome/Safari. Click OK. To trigger it now,"
+  echo "open YouTube in Chrome, focus it, then run:  focuslock track-tick"
+  echo "Grant later under: System Settings > Privacy & Security > Automation."
+  echo ""
+  echo "Data → $USAGE_LOG   (the dashboard reads this for real per-site minutes)"
+}
+
+cmd_uninstall_usage() {
+  if [ "$EUID" -eq 0 ]; then
+    echo "Run without sudo — usage tracking is a per-user agent."
+    exit 1
+  fi
+  if [ -f "$USAGE_AGENT_PLIST" ]; then
+    local uid; uid=$(id -u)
+    launchctl bootout "gui/$uid/$USAGE_AGENT_LABEL" 2>/dev/null \
+      || launchctl unload "$USAGE_AGENT_PLIST" 2>/dev/null
+    rm -f "$USAGE_AGENT_PLIST"
+    echo "Usage tracking uninstalled. Log kept at $USAGE_LOG"
+  else
+    echo "Usage tracking was not installed."
+  fi
+}
+
 cmd_install_tracker() {
   local brew_prefix
   brew_prefix=$(detect_brew_prefix)
@@ -1039,6 +1182,8 @@ Usage:
   sudo focuslock disable-chrome-doh   stop Chrome bypassing /etc/hosts via DoH
   sudo focuslock install-tracker      install dnsmasq to log all DNS queries
   sudo focuslock uninstall-tracker    remove dnsmasq DNS tracker
+  focuslock install-usage             track real time-on-site per tracked domain
+  focuslock uninstall-usage           stop per-site usage tracking
   sudo focuslock update               download + install latest release from GitHub
   focuslock dictate setup             install push-to-talk dictation (local whisper)
   focuslock dictate test|review|stats train/inspect your voice model
@@ -1374,6 +1519,9 @@ case "$COMMAND" in
   disable-chrome-doh) cmd_disable_chrome_doh ;;
   install-tracker)    cmd_install_tracker ;;
   uninstall-tracker)  cmd_uninstall_tracker ;;
+  install-usage)      cmd_install_usage ;;
+  uninstall-usage)    cmd_uninstall_usage ;;
+  track-tick)         cmd_track_tick ;;
   update)             cmd_update ;;
   dictate)            shift; cmd_dictate "$@" ;;
   *)                  cmd_help ;;
