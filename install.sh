@@ -61,6 +61,13 @@ killall -HUP mDNSResponder 2>/dev/null
 # Stop Chrome bypassing /etc/hosts via Secure DNS (DoH)
 "$INSTALL_DIR/focuslock" disable-chrome-doh
 
+# Per-site usage tracking — user LaunchAgent (NOT root): polls the frontmost
+# browser tab every 20s so the dashboard can show real time-on-site per domain.
+# Needs the user's GUI session for AppleScript, so install as the logged-in user.
+if [ -n "$_LOGGED_USER" ] && [ "$_LOGGED_USER" != "root" ]; then
+  sudo -u "$_LOGGED_USER" -H "$INSTALL_DIR/focuslock" install-usage || true
+fi
+
 # ── Dashboard ──────────────────────────────────────────────────────────────
 DASHBOARD_SRC="$(dirname "$0")/dashboard"
 DASHBOARD_DEST="/usr/local/lib/focuslock-dashboard"
