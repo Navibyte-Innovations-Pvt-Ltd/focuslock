@@ -54,23 +54,17 @@ function positionWindow(): void {
   const trayBounds = tray.getBounds()
   const [winW, winH] = win.getSize()
 
-  // Anchor to the display under the cursor (the screen the user is actually on),
-  // falling back to the tray's own display. The menu-bar tray reports bounds on
-  // the active-menu-bar display, which is often not where the user is working.
+  // Anchor to the display the user just clicked on. The menu-bar tray click
+  // happens under the cursor, so the cursor's display IS the active screen —
+  // unlike trayBounds, which Electron can mis-map to the primary display on
+  // multi-monitor setups (the "always opens on primary" bug).
   const cursor = screen.getCursorScreenPoint()
-  const cursorDisplay = screen.getDisplayNearestPoint(cursor)
-  const trayDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y })
-  const sameDisplay = cursorDisplay.id === trayDisplay.id
-  const { workArea } = cursorDisplay
+  const { workArea } = screen.getDisplayNearestPoint(cursor)
 
-  // If the tray is on this display, drop the window under the tray icon;
-  // otherwise center it near the cursor at the top of the current display.
-  let x = sameDisplay
-    ? Math.round(trayBounds.x + trayBounds.width / 2 - winW / 2)
-    : Math.round(cursor.x - winW / 2)
-  let y = sameDisplay
-    ? Math.round(trayBounds.y + trayBounds.height + 4)
-    : workArea.y + 4
+  // Drop the window just below the tray icon's vertical position, centered
+  // horizontally under the cursor, clamped into the active display's work area.
+  let x = Math.round(cursor.x - winW / 2)
+  let y = Math.round(trayBounds.y + trayBounds.height + 4)
 
   x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - winW))
   y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - winH))
