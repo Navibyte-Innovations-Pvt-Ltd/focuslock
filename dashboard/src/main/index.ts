@@ -46,6 +46,14 @@ function createWindow(): void {
   win.on('blur', () => {
     if (win && !win.webContents.isDevToolsOpened()) win.hide()
   })
+
+  // Refetch on every open. The 5-min timer only PUSHES while visible (window is
+  // hidden ~always), so without this the menubar shows a stale snapshot from the
+  // last time it happened to be open — e.g. last night's usage, missing today's.
+  win.on('show', () => {
+    cachedData = loadActivityData()
+    win?.webContents.send('data-refreshed', cachedData)
+  })
 }
 
 function positionWindow(): void {
