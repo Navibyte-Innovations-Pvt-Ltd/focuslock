@@ -652,7 +652,7 @@ cmd_track_tick() {
 
   # URL → bare host (strip scheme, path, port; lowercase)
   local host
-  host=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##; s#:[0-9]+$##' | tr 'A-Z' 'a-z')
+  host=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##; s#:[0-9]+$##' | tr '[:upper:]' '[:lower:]')
   [ -z "$host" ] && exit 0
 
   # Match host to a tracked base domain, subdomain-aware:
