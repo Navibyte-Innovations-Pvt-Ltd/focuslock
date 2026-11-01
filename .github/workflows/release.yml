@@ -5,6 +5,12 @@ on:
     branches:
       - main
 
+# Serialize releases: parallel pushes computed the same next tag and the
+# second npm publish failed with E409 (issue #25). Queue, never cancel.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
